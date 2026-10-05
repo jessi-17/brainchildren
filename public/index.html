@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="bc-token" content="%%BC_TOKEN%%">
+  <title>brainchildren</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preload" href="/fonts/pixelify-sans-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/fonts/fredoka-latin-500-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/css/app.css">
+  <script type="module" src="/js/main.js"></script>
+</head>
+<body>
+  <main id="desktop" class="desktop" aria-label="brainchildren">
+    <div id="world" class="world" aria-label="your studio"></div>
+    <button id="status" class="studio-status" hidden></button>
+    <section id="dashboard" class="dash" hidden></section>
+    <div id="windows" class="windows"></div>
+    <div id="balloons" class="balloons" aria-live="polite"></div>
+    <p id="empty-hint" class="empty-hint" hidden></p>
+  </main>
+
+  <footer id="taskbar" class="taskbar">
+    <button id="start" class="start" aria-haspopup="menu" aria-expanded="false"><span class="start-mark">✿</span> start</button>
+    <div class="views" role="group" aria-label="view">
+      <button id="view-studio" class="view-btn" aria-pressed="true"></button>
+      <button id="view-dash" class="view-btn" aria-pressed="false"></button>
+    </div>
+    <div class="desk-label" aria-hidden="true">★ desk</div>
+    <div id="desk" class="desk-slots" aria-label="your desk: up to three projects in focus"></div>
+    <div id="tray" class="tray">
+      <button id="tray-ghosts" class="tray-ghosts" hidden></button>
+      <span id="tray-scan" class="tray-scan" hidden>scanning…</span>
+      <button id="tray-time" class="tray-time" hidden></button>
+      <button id="help" class="help" aria-label="show me around" title="show me around">?</button>
+      <span id="clock" class="clock"></span>
+    </div>
+  </footer>
+  <div id="startmenu" class="startmenu" role="menu" hidden></div>
+
+  <noscript><p class="noscript">brainchildren needs JavaScript to run.</p></noscript>
+</body>
+</html>

@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>brainchildren parts kit</title>
+<style>
+  :root {
+    --bg: #FFF7FB;
+    --card: #FFFFFF;
+    --tile: #F4EEFF;
+    --tile-alt: #EFF8FF;
+    --ink: #2B2A5E;
+    --muted: #7A779E;
+    --line: #E6DDF7;
+    --body: #FFB3D1;
+    --blush: #FF6FAE;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 28px 16px 60px;
+    background: var(--bg);
+    color: var(--ink);
+    font: 14px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif;
+  }
+  main { max-width: 1320px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -.01em; }
+  .sub { color: var(--muted); margin: 0 0 26px; }
+  h2 {
+    font-size: 13px; text-transform: uppercase; letter-spacing: .08em;
+    margin: 30px 0 10px; color: var(--muted);
+  }
+  h2 b { color: var(--ink); }
+  .grid { display: flex; flex-wrap: wrap; gap: 10px; }
+  .card {
+    background: var(--card); border: 2px solid var(--line); border-radius: 14px;
+    padding: 8px 8px 6px; width: 132px; text-align: center;
+  }
+  .card .tile {
+    background: var(--tile); border-radius: 9px; width: 112px; height: 112px;
+    margin: 0 auto; position: relative;
+  }
+  .card .tile img { width: 112px; height: 112px; display: block; }
+  /* faint guide box so anything touching the 100x100 edge is easy to spot */
+  .card .tile::after {
+    content: ""; position: absolute; inset: 0; border: 1px dashed rgba(43,42,94,.12); border-radius: 9px;
+    pointer-events: none;
+  }
+  .card code { display: block; font: 12px/1.3 ui-monospace, Consolas, monospace; margin-top: 6px; color: var(--ink); }
+  .card.reserved code { color: #B04C82; }
+  .assembled { display: flex; flex-wrap: wrap; gap: 14px; }
+  .creature {
+    background: var(--card); border: 2px solid var(--line); border-radius: 16px; padding: 10px; width: 222px;
+  }
+  .stack { position: relative; width: 200px; height: 200px; background: var(--tile-alt); border-radius: 12px; }
+  .stack:nth-child(odd) { background: var(--tile); }
+  .stack > * { position: absolute; left: 0; top: 0; width: 200px; height: 200px; }
+  .creature p { margin: 8px 2px 0; font: 11.5px/1.4 ui-monospace, Consolas, monospace; color: var(--muted); }
+  .note { color: var(--muted); font-size: 12.5px; margin: 0 0 10px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>brainchildren parts kit</h1>
+  <p class="sub">QA contact sheet. Every part sits on the same 100&times;100 canvas (dashed box). Pink names starting with _ are reserved state parts.</p>
+
+  <h2><b>assembled</b> samples</h2>
+  <p class="note">Body + eyes + mouth + hat + prop stacked as &lt;img&gt;s. Feet and blush are drawn here the way the app will draw them in code. Face and hat layers shift by the body's data-face / data-hat.</p>
+  <div class="assembled" id="assembled"></div>
+
+  <div id="slots"></div>
+</main>
+
+<script>
+  const PARTS = {
+    bodies: ['bean', 'cat', 'bunny', 'bear', 'mushroom', 'monitor', 'cloud', 'onigiri'],
+    eyes: ['dots', 'shiny', 'happy', 'sparkle', 'sleepy', 'wide', '_sleep', '_ghost'],
+    mouths: ['smile', 'open', 'cat', 'flat', 'tongue', '_sleep', '_sad'],
+    hats: ['sprout', 'bow', 'beanie', 'antenna', 'flower', 'clip', '_shell', '_crown'],
+    props: ['music', 'camera', 'game', 'writing', 'mail', '3d', 'social', 'ai', 'art', 'party', 'web', 'code'],
+    eggs: ['spots', 'stripes', 'zigzag', 'hearts'],
+  };
+
+  // anchors declared on the body SVGs (data-face / data-hat / data-hand); everything else is standard
+  const STANDARD = { face: [50, 58], hat: [50, 24], hand: [80, 66] };
+  const ANCHORS = {
+    mushroom: { face: [50, 67] },
+    monitor: { face: [50, 51] },
+    onigiri: { hat: [50, 30] },
+  };
+
+  const SAMPLES = [
+    ['bean', 'shiny', 'smile', 'sprout', 'writing'],
+    ['cat', 'happy', 'cat', 'bow', 'music'],
+    ['bunny', 'dots', 'open', 'flower', 'camera'],
+    ['bear', 'sleepy', 'flat', 'beanie', 'code'],
+    ['mushroom', 'sparkle', 'smile', null, 'art'],
+    ['monitor', 'wide', 'tongue', 'antenna', 'web'],
+    ['cloud', 'dots', 'open', 'clip', 'party'],
+    ['onigiri', 'shiny', 'cat', '_crown', 'game'],
+    ['bean', 'happy', 'tongue', '_shell', null],
+    ['bear', '_sleep', '_sleep', null, null],
+    ['cat', '_ghost', '_sad', null, 'mail'],
+    ['bunny', 'sparkle', 'cat', 'clip', 'social'],
+    ['cloud', 'wide', 'smile', 'beanie', 'ai'],
+    ['mushroom', 'happy', 'open', 'bow', '3d'],
+  ];
+
+  const slots = document.getElementById('slots');
+  for (const [slot, names] of Object.entries(PARTS)) {
+    const h = document.createElement('h2');
+    h.innerHTML = `<b>${slot}/</b> &middot; ${names.length} files`;
+    const grid = document.createElement('div');
+    grid.className = 'grid';
+    for (const n of names) {
+      const c = document.createElement('div');
+      c.className = 'card' + (n.startsWith('_') ? ' reserved' : '');
+      c.innerHTML = `<div class="tile"><img src="${slot}/${n}.svg" alt="${n}"></div><code>${n}.svg</code>`;
+      grid.appendChild(c);
+    }
+    slots.append(h, grid);
+  }
+
+  const NS = 'http://www.w3.org/2000/svg';
+  function feetLayer() {
+    return `<svg viewBox="0 0 100 100" xmlns="${NS}">
+      <ellipse cx="40" cy="91" rx="7" ry="4.3" fill="#FFB3D1" stroke="#2B2A5E" stroke-width="3"/>
+      <ellipse cx="60" cy="91" rx="7" ry="4.3" fill="#FFB3D1" stroke="#2B2A5E" stroke-width="3"/></svg>`;
+  }
+  function blushLayer([fx, fy]) {
+    return `<svg viewBox="0 0 100 100" xmlns="${NS}">
+      <ellipse cx="${fx - 16}" cy="${fy + 6}" rx="4" ry="2.6" fill="#FF6FAE" opacity=".35"/>
+      <ellipse cx="${fx + 16}" cy="${fy + 6}" rx="4" ry="2.6" fill="#FF6FAE" opacity=".35"/></svg>`;
+  }
+  const shift = (body, key) => {
+    const a = (ANCHORS[body] || {})[key] || STANDARD[key];
+    const dx = a[0] - STANDARD[key][0], dy = a[1] - STANDARD[key][1];
+    return dx || dy ? ` style="transform: translate(${dx}%, ${dy}%)"` : '';
+  };
+
+  const wrap = document.getElementById('assembled');
+  for (const [body, eyes, mouth, hat, prop] of SAMPLES) {
+    const face = (ANCHORS[body] || {}).face || STANDARD.face;
+    let html = feetLayer();
+    html += `<img src="bodies/${body}.svg" alt="">`;
+    html += blushLayer(face);
+    html += `<img src="eyes/${eyes}.svg" alt=""${shift(body, 'face')}>`;
+    html += `<img src="mouths/${mouth}.svg" alt=""${shift(body, 'face')}>`;
+    if (hat) html += `<img src="hats/${hat}.svg" alt=""${shift(body, 'hat')}>`;
+    if (prop) html += `<img src="props/${prop}.svg" alt=""${shift(body, 'hand')}>`;
+    const el = document.createElement('div');
+    el.className = 'creature';
+    el.innerHTML = `<div class="stack">${html}</div><p>${[body, eyes, mouth, hat || '-', prop || '-'].join(' · ')}</p>`;
+    wrap.appendChild(el);
+  }
+</script>
+</body>
+</html>
