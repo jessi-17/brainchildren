@@ -100,6 +100,7 @@ export function refreshAll() {
 }
 
 export const getWindow = (key) => open.get(key);
+export const closeAll = () => [...open.values()].forEach((w) => w.close());
 export const closeWindow = (key) => open.get(key)?.close();
 
 addEventListener('keydown', (e) => {

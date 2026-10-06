@@ -10,9 +10,11 @@
   * { box-sizing: border-box; }
   body { margin: 0; padding: 20px 16px 60px; background: var(--bg); color: var(--ink); font: 14px/1.45 "Segoe UI", system-ui, sans-serif; }
   h1 { font-size: 20px; margin: 0 0 4px; }
-  .sub { color: var(--muted); margin: 0 0 14px; }
+  h3 { font-size: 15px; margin: 26px 0 8px; }
+  .sub { color: var(--muted); margin: 0 0 14px; max-width: 980px; }
   .bar { display: flex; flex-wrap: wrap; gap: 14px 22px; align-items: center; margin: 0 0 18px; padding: 10px 12px; background: var(--card); border: 2px solid var(--line); border-radius: 12px; }
   .bar label { display: inline-flex; gap: 6px; align-items: center; }
+  .bar button { font: inherit; color: var(--ink); background: #efe9ff; border: 2px solid var(--line); border-radius: 8px; padding: 3px 10px; cursor: pointer; }
   .grid { display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-start; }
   .card { background: var(--card); border: 2px solid var(--line); border-radius: 12px; padding: 8px; }
   .card h2 { font-size: 12px; font-weight: 600; letter-spacing: .04em; margin: 0 0 6px; color: var(--muted); }
@@ -20,21 +22,35 @@
   .stack { position: relative; }
   .stack canvas { position: absolute; left: 0; top: 0; image-rendering: pixelated; }
   .stack canvas.debug { image-rendering: auto; }
-  .stack canvas[hidden] { display: none; }
+  canvas.crop { display: block; image-rendering: pixelated; }
   pre { background: var(--card); border: 2px solid var(--line); border-radius: 12px; padding: 10px 12px; font: 12px/1.5 ui-monospace, Consolas, monospace; white-space: pre-wrap; }
   #err { color: #c0245c; }
+  .pass { color: #1f8a5b; }
+  .fail { color: #c0245c; }
 </style>
 <script type="module" src="/dev/room.js"></script>
 </head>
 <body>
   <h1>the studio · room.js preview</h1>
-  <p class="sub">back canvas → seated stand-ins (red line = waist, y−16) → front canvas → walkers, nappers, eggs, ghosts. Toggle the debug overlay to see hotspots, the walk band, seats, nap spots, nest slots and the ghost area.</p>
+  <p class="sub">back canvas → seated stand-ins (red line = waist, y−16) → front canvas → walkers, nappers, eggs, cats. The debug overlay shows hotspots plus the new rects: name sign (orange), board text area (cyan), board pins (gold), wall spots (green), desk screens (blue), cat nap spots (brown), your armchair (red) and the town-meeting spots (purple dots). Add <code>?sweep=1</code> to run the size sweep on load.</p>
   <div class="bar">
     <label><input type="checkbox" id="debug"> debug overlay</label>
     <label><input type="checkbox" id="people" checked> stand-ins</label>
     <label>custom hour <input type="range" id="hour" min="0" max="23.75" step="0.25" value="21"> <span id="hourOut"></span></label>
+    <button id="sweepBtn" type="button">run size sweep</button>
   </div>
+  <h3>rooms</h3>
   <div class="grid" id="out"></div>
+  <h3>every wall × floors</h3>
+  <div class="grid" id="walls"></div>
+  <h3>every window view × light</h3>
+  <div class="grid" id="views"></div>
+  <h3>seasons (Jan · Apr · Jul · Oct · Dec)</h3>
+  <div class="grid" id="seasons"></div>
+  <h3>earned decor (none · mid · max) and music</h3>
+  <div class="grid" id="earned"></div>
+  <h3>self-check</h3>
+  <pre id="sweep">sweep not run yet</pre>
   <pre id="timing">timing…</pre>
   <pre id="err"></pre>
 </body>

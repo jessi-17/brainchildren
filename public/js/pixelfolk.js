@@ -1122,11 +1122,20 @@ export function person(seed, opts = {}) {
   const mood = MOODS.has(o.mood) ? o.mood : 'awake';
   const stage = STAGES.has(o.stage) ? o.stage : 'growing';
   const kind = o.kind && Object.prototype.hasOwnProperty.call(PROPS, o.kind) ? o.kind : null;
-  const key = `${seed}|${mood}|${stage}|${kind}`;
+  // dress-up choices win over the seed; a project's brand colour becomes the outfit
+  const traits = o.traits && typeof o.traits === 'object' ? o.traits : null;
+  const outfitColor = /^#[0-9a-f]{6}$/i.test(o.outfitColor || '') ? o.outfitColor.toLowerCase() : null;
+  const key = `${seed}|${mood}|${stage}|${kind}|${traits ? JSON.stringify(traits) : ''}|${outfitColor || ''}`;
   const hit = people.get(key);
   if (hit) return hit;
 
-  const T = traitsFor(seed);
+  const T = { ...traitsFor(seed), ...(traits || {}) };
+  if (outfitColor && !(traits && 'top' in traits)) {
+    if (T.outfit === 'overalls') T.bottom = outfitColor;
+    else T.top = outfitColor;
+    if (T.outfit === 'dress') T.bottom = T.top;
+    if (T.accent === outfitColor) T.accent = CREAM;
+  }
   const P = paletteFor(T);
   const tone = mood === 'ghost' ? ghostly : null;
   const frame = (pose, phase = 0, face = mood) => renderFrame(T, P, { pose, phase, face, stage, kind });
@@ -1140,6 +1149,24 @@ export function person(seed, opts = {}) {
   };
   return remember(people, key, out);
 }
+
+// for the dress-up window: what a seed looks like, and every choice there is
+export const traitsOf = (seed) => ({ ...traitsFor(Number(seed) >>> 0) });
+export const TRAIT_CHOICES = {
+  skin: SKINS,
+  style: STYLES,
+  hairColor: [...HAIR_NAT.map(([c]) => c), ...HAIR_PASTEL, ...HAIR_OLD],
+  hat: [null, 'beanie', 'cap', 'scarf'],
+  hatColor: HATS,
+  outfit: OUTFITS,
+  top: TOPS,
+  bottomKind: ['pants', 'shorts', 'skirt'],
+  bottom: [...BOTTOMS, ...DENIM],
+  shoe: SHOES,
+  glasses: [null, 'round', 'square'],
+  beard: [null, 'full', 'goatee', 'mustache'],
+  extras: ['phones', 'bow', 'freckles', 'blush'],
+};
 
 /* ------------------------------------------------------------------ eggs */
 

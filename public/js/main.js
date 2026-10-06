@@ -10,17 +10,86 @@ import { createApps } from './apps.js';
 import { createDashboard } from './dashboard.js';
 import { thumbHtml, setLookStyle } from './look.js';
 import { startTour, tourDone } from './tour.js';
+import { extendApps } from './apps-more.js';
+import { extendAI } from './apps-ai.js';
+import { openPalette } from './palette.js';
+import { undoLast } from './undo.js';
+import { restore as restoreFocus, show as showFocus } from './focus.js';
+import { setAmbience, ambience, nextSong } from './audio.js';
+import { api as apiCall, usePractice } from './api.js';
+import { demoState, createDemoServer } from './demo.js';
+import { startSimulation } from './simulate.js';
+import { closeAll } from './wm.js';
+import { openMenu } from './menu.js';
 
 const $ = (id) => document.getElementById(id);
 const app = { state: null, model: null, view: 'studio' };
+const byKey = (key) => app.model?.byKey.get(key);
 app.studio = new Studio($('world'), {
-  onOpen: (key, el) => app.ui.props(key, el),
+  // a person with a note from past you hands you the letter first
+  onOpen: (key, el) => (byKey(key)?.letter ? app.ui.letter(byKey(key), el) : app.ui.props(key, el)),
   onHotspot: (id, el) => hotspot(id, el),
   hotLabel: (id) => hotLabel(id),
+  onMenu: (key, x, y) => app.ui.menuFor(byKey(key), x, y),
+  onMe: (e) => app.ui.dressUp('me', e?.target),
+  onPin: (key, el) => app.ui.props(key, el),
+  onWall: (action, id, pos, el) => {
+    const item = app.state.wall.find((w) => w.id === id);
+    if (!item) return;
+    if (action === 'move') return apiCall.patch(`/api/wall/${id}`, pos).then(app.setState, app.oops);
+    if (item.kind === 'note') return app.ui.wallNote(el, item);
+    app.ui.confirm({ title: 'take this photo down?', text: 'it only lives in brainchildren, so it will be gone.', ok: 'take it down' }).then((yes) => yes && apiCall.del(`/api/wall/${id}`).then(app.setState, app.oops));
+  },
 });
 app.habitat = app.studio;
 app.ui = createApps(app);
+extendApps(app, app.ui);
+extendAI(app, app.ui);
+app.studio.meSeed = () => app.ui.meSeed();
 app.dash = createDashboard(app);
+app.tour = () => startTour(app);
+app.walkthrough = (chapter = 0) => startSimulation(app, { chapter });
+
+// ------------------------------------------------------------ the practice studio
+// made-up projects that live only in this tab; nothing touches your real data
+app.enterPractice = async () => {
+  if (!app.practice) app.realSetupDone = !!app.state?.settings.setupDone;
+  closeAll();
+  clock.offsetDays = 0;
+  const st = demoState({ name: app.state?.settings.name || app.state?.user || 'you', version: app.state?.version || '' });
+  usePractice(createDemoServer(st));
+  app.practice = true;
+  document.body.classList.add('practice');
+  $('practice-banner').hidden = false;
+  app.setState(await apiCall.get('/api/state'));
+};
+app.exitPractice = async () => {
+  if (!app.practice) return;
+  closeAll();
+  clock.offsetDays = 0;
+  usePractice(null);
+  app.practice = false;
+  document.body.classList.remove('practice');
+  $('practice-banner').hidden = true;
+  await app.refresh();
+  if (app.state && !app.state.settings.setupDone) app.ui.settings(null, { welcome: true });
+};
+app.afterWalkthrough = () => {
+  if (app.practice) balloon({ title: "you're still in the practice studio", text: 'play around as much as you like. "exit practice" at the top takes you back.', timeout: 7000 });
+};
+app.showMeAround = (el) => {
+  const r = (el || $('help')).getBoundingClientRect();
+  openMenu(r.left, r.top - 150, [
+    { label: '▶ full walkthrough (about 4 minutes)', action: () => app.walkthrough() },
+    { label: 'quick tour of this room (30 seconds)', action: () => startTour(app) },
+    { label: app.practice ? 'leave the practice studio' : 'play in the practice studio', action: () => (app.practice ? app.exitPractice() : app.enterPractice()) },
+  ], { title: 'show me around' });
+};
+$('practice-banner').addEventListener('click', (e) => {
+  const act = e.target.closest('[data-p]')?.dataset.p;
+  if (act === 'walk') app.walkthrough();
+  if (act === 'exit') app.exitPractice();
+});
 
 app.setState = (s) => {
   app.state = s;
@@ -110,6 +179,17 @@ function hotspot(id, el) {
     nest: () => app.ui.nest(el),
     sofa: () => app.ui.taskmgr(el, 'attention'),
     shelf: () => app.ui.about(el),
+    record: () => {
+      const next = ambience() === 'radio' ? 'off' : 'radio';
+      setAmbience(next);
+      apiCall.post('/api/prefs', { ambience: next }).then(app.setState, () => {});
+    },
+    chair: () => app.ui.dressUp('me', el),
+    sign: () => app.ui.settings(el, { tab: 'studio' }),
+    trophies: () => {
+      const e = app.model.earned;
+      balloon({ title: 'things you earned ✿', text: `${plural(e.trophies, 'trophy', 'trophies')} for shipped projects · a plant at stage ${e.plant}/5 (it grows when you revive ghosts) · ${plural(e.books, 'lessons book')} (one per 5 ideas let go)`, timeout: 9000 });
+    },
   };
   actions[id]?.();
 }
@@ -124,7 +204,11 @@ function hotLabel(id) {
   const eggs = m.live.filter((c) => c.type === 'egg').length;
   const napping = m.live.filter((c) => c.energy === 'asleep').length;
   return {
-    board: 'whiteboard · your dashboard: charts, lists, what needs attention',
+    board: 'whiteboard · click for your dashboard, right-click to write on it',
+    record: ambience() === 'radio' ? 'record player · playing the garden radio (click to stop)' : 'record player · click for soft music',
+    chair: 'your chair · where you relax (click to change how you look)',
+    sign: `${m.settings.studio?.name || `${m.user}'s studio`} · click to rename or redecorate`,
+    trophies: `trophy shelf · ${plural(m.earned.trophies, 'shipped project')}`,
     fridge: `freezer · ${plural(m.freezer.length, 'idea')} kept for later`,
     bin: `recycle bin · ${plural(m.bin.length, 'idea')} let go`,
     calendar: clock.offsetDays ? `time machine · showing ${plural(clock.offsetDays, 'day')} ahead` : 'time machine · peek into the future',
@@ -143,7 +227,14 @@ $('view-studio').innerHTML = `${icons.home}<span>studio</span>`;
 $('view-dash').innerHTML = `${icons.taskmgr}<span>dashboard</span>`;
 $('view-studio').addEventListener('click', () => app.showView('studio'));
 $('view-dash').addEventListener('click', () => app.showView(app.view === 'dashboard' ? 'studio' : 'dashboard'));
-$('help').addEventListener('click', () => startTour(app));
+$('help').addEventListener('click', (e) => app.showMeAround(e.currentTarget));
+$('world').addEventListener('contextmenu', (e) => {
+  if (e.target.closest('[data-hot="board"]')) {
+    e.preventDefault();
+    app.ui.board(e.target);
+  }
+});
+$('focus-pill').addEventListener('click', () => showFocus(app));
 $('status').addEventListener('click', () => app.showView('dashboard'));
 
 function drawTaskbar() {
@@ -180,6 +271,12 @@ $('desk').addEventListener('click', (e) => {
   app.studio.spotlight(slot.dataset.key);
   app.ui.props(slot.dataset.key, slot);
 });
+$('desk').addEventListener('contextmenu', (e) => {
+  const slot = e.target.closest('.slot[data-key]');
+  if (!slot) return;
+  e.preventDefault();
+  app.ui.menuFor(byKey(slot.dataset.key), e.clientX, e.clientY);
+});
 $('tray-ghosts').addEventListener('click', (e) => {
   const c = app.model.visits[0];
   if (c) app.ui.visit(c, e.currentTarget);
@@ -196,6 +293,7 @@ function drawStatus() {
     count('asleep') && `${count('asleep')} napping`,
     count('ghost') && plural(count('ghost'), 'ghost'),
     plural(m.live.filter((c) => c.type === 'egg').length, 'egg'),
+    m.live.some((c) => c.letter) && `✉ ${plural(m.live.filter((c) => c.letter).length, 'note')} from past you`,
   ].filter(Boolean);
   el.innerHTML = `<span>${esc(parts.join(' · '))}</span><b>dashboard →</b>`;
   el.hidden = app.view === 'dashboard' || !m.live.length;
@@ -213,13 +311,23 @@ setInterval(drawClock, 15000);
 
 const START = [
   ['new idea…', 'egg', (el) => app.ui.run(el)],
+  ['find anything…  ctrl+K', 'scan', () => openPalette(app)],
   ['dashboard', 'taskmgr', () => app.showView('dashboard')],
+  ['pick for me', 'desk', (el) => app.ui.pickForMe(el)],
+  ['sort my eggs', 'egg', (el) => app.ui.sortEggs(el)],
+  ['town meeting', 'home', (el) => app.ui.townMeeting(el)],
+  ['ask your studio ✨', 'about', (el) => app.ui.ask(el)],
+  ['monthly reflection ✨', 'about', (el) => app.ui.reflect(el)],
+  null,
   ['task manager', 'taskmgr', (el) => app.ui.taskmgr(el)],
   ['egg nest', 'egg', (el) => app.ui.nest(el)],
   ['recycle bin', 'bin', (el) => app.ui.bin(el)],
   ['freezer', 'freezer', (el) => app.ui.freezer(el)],
   null,
-  ['show me around', 'about', () => startTour(app)],
+  ['write on the whiteboard', 'taskmgr', (el) => app.ui.board(el)],
+  ['decorate the studio', 'home', (el) => app.ui.settings(el, { tab: 'studio' })],
+  ['how you look', 'desk', (el) => app.ui.dressUp('me', el)],
+  ['show me around…', 'about', (el) => app.showMeAround(el)],
   ['rescan folders', 'scan', () => app.rescan()],
   ['settings', 'settings', (el) => app.ui.settings(el)],
   ['about', 'about', (el) => app.ui.about(el)],
@@ -248,6 +356,14 @@ addEventListener('keydown', (e) => {
     startBtn.focus();
   }
   const typing = e.target.closest?.('input, textarea, select, [contenteditable]');
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+    e.preventDefault();
+    return openPalette(app);
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !typing) {
+    if (undoLast()) e.preventDefault();
+    return;
+  }
   if (!typing && !e.ctrlKey && !e.metaKey && !e.altKey && (e.key === 'n' || e.key === 'N') && !document.querySelector('.tour')) {
     e.preventDefault();
     app.ui.run();
@@ -273,7 +389,7 @@ function drawHint() {
 const greeted = new Set();
 function greetGhosts() {
   const fresh = app.model.visits.filter((c) => !greeted.has(c.key));
-  if (!fresh.length || !app.state.settings.setupDone || document.querySelector('.tour')) return;
+  if (!fresh.length || !app.state.settings.setupDone || document.querySelector('.tour') || app.simulating) return;
   fresh.forEach((c) => greeted.add(c.key));
   const first = fresh[0];
   balloon({
@@ -294,11 +410,29 @@ async function boot() {
     document.body.insertAdjacentHTML('beforeend', `<p class="noscript">couldn't load brainchildren: ${esc(err.message)}</p>`);
     return;
   }
+  restoreFocus(app);
+  if (app.state.settings.ambience !== 'off') setAmbience(app.state.settings.ambience);
   if (!app.state.settings.setupDone) app.ui.settings(null, { welcome: true });
-  else if (!tourDone()) setTimeout(() => startTour(app), 1200);
+  else {
+    weeklyMeetingNudge();
+    if (!tourDone()) setTimeout(() => startTour(app), 1200);
+  }
   if (app.state.scanning) setTimeout(app.refresh, 1500);
   setInterval(app.refresh, 20000);
   addEventListener('focus', app.refresh);
+}
+
+// once a week, a gentle "town meeting" invitation inside the app
+function weeklyMeetingNudge() {
+  let last = 0;
+  try {
+    last = Number(localStorage.getItem('brainchildren:meeting-nudge')) || 0;
+  } catch {}
+  if (Date.now() - last < 7 * 86400000 || !app.model.live.length) return;
+  try {
+    localStorage.setItem('brainchildren:meeting-nudge', String(Date.now()));
+  } catch {}
+  setTimeout(() => balloon({ title: "it's town meeting time ✿", text: 'everyone gathers at the whiteboard for a quick look at your week.', timeout: 20000, onClick: () => app.ui.townMeeting() }), 4000);
 }
 
 boot();

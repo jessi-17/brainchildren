@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cat preview</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<style>
+  :root { --ink: #2b2a5e; --muted: #6c6896; --bg: #f4efff; --card: #ffffff; --line: #e2d9f7; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 20px 16px 60px; background: var(--bg); color: var(--ink); font: 14px/1.45 "Segoe UI", system-ui, sans-serif; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 14px; }
+  .grid { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; }
+  .card { background: var(--card); border: 2px solid var(--line); border-radius: 12px; padding: 8px 10px; }
+  .card h2 { font-size: 12px; font-weight: 600; letter-spacing: .04em; margin: 0 0 6px; color: var(--muted); }
+  .row { display: flex; gap: 10px; align-items: flex-end; }
+  .row figure { margin: 0; text-align: center; font-size: 11px; color: var(--muted); }
+  canvas { image-rendering: pixelated; display: block; }
+  canvas.chk { background: repeating-conic-gradient(#f3eefc 0% 25%, #ffffff 0% 50%) 0 0 / 16px 16px; }
+  #err { color: #c0245c; }
+</style>
+<script type="module" src="/dev/cat.js"></script>
+</head>
+<body>
+  <h1>the studio cat · cat.js preview</h1>
+  <p class="sub">every coat × every frame at 6×, a walk cycle, and the cat at 3× next to a 20×28 stand-in.</p>
+  <div class="grid" id="out"></div>
+  <pre id="err"></pre>
+</body>
+</html>

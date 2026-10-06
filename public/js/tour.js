@@ -44,7 +44,7 @@ export function startTour(app) {
       title: 'this is one of your projects',
       text: () => {
         const it = walker();
-        return `${it ? `meet ${it.c.name}. ` : ''}click anyone to see what the project is, how far it got and where you left off. hover to see their name.`;
+        return `${it ? `meet ${it.c.name}. ` : ''}click anyone to see what the project is and where you left off. right-click for quick actions: ▶ resume opens it in your editor with a focus timer, and you can leave a note for future you.`;
       },
     },
     {
@@ -65,7 +65,12 @@ export function startTour(app) {
     {
       target: hot('board'),
       title: 'the whiteboard is your dashboard',
-      text: "charts, lists and everything that needs attention. it's also on the taskbar.",
+      text: "click it for charts, lists and everything that needs attention. right-click it to write your own goal on it, and pin eggs to it.",
+    },
+    {
+      target: () => document.querySelector('.person.me')?.getBoundingClientRect() || null,
+      title: "and this is you",
+      text: 'you walk over to whatever you’re working on, and relax in your chair the rest of the time. click yourself to change how you look.',
     },
     {
       target: hot('fridge', 'bin'),
@@ -80,7 +85,7 @@ export function startTour(app) {
     {
       target: () => document.getElementById('help')?.getBoundingClientRect() || null,
       title: "that's it!",
-      text: 'hover over anything in the room to see what it is. replay this tour any time with the ? button.',
+      text: 'hover over anything in the room to see what it is. press ctrl+K to find anything, ctrl+Z to undo. decorate the studio and dress up from the start menu. replay this tour with the ? button.',
       last: true,
     },
   ];

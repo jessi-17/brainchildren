@@ -37,7 +37,11 @@ export function createDashboard(app) {
           </div>
           <label class="check"><input type="checkbox" data-attention> needs attention only</label>
           <span class="grow"></span>
-          <button class="btn small" data-act="rescan">↻ rescan folders</button>
+          <button class="btn small" data-act="pick">pick for me</button>
+          <button class="btn small" data-act="sort">sort my eggs</button>
+          <button class="btn small" data-act="meeting">town meeting</button>
+          <button class="btn small" data-act="ask">ask ✨</button>
+          <button class="btn small" data-act="rescan">↻ rescan</button>
           <button class="btn small" data-act="back">← back to the studio</button>
         </div>
         <div class="dash-body"></div>
@@ -62,7 +66,7 @@ export function createDashboard(app) {
         (!q || `${c.name} ${c.p?.folder || ''} ${c.p?.bio || ''} ${c.idea?.note || ''}`.toLowerCase().includes(q)),
     );
   };
-  const touched = (c) => (c.type === 'egg' ? c.idea.createdAt : c.p.lastTouched);
+  const touched = (c) => (c.type === 'egg' ? c.idea.createdAt : c.lastActive);
 
   // ------------------------------------------------------------ render
 
@@ -97,6 +101,7 @@ export function createDashboard(app) {
         ${kpi('shipped', live.filter((c) => c.stage === 'shipped').length, 'out in the world', 'data-stage="shipped"')}
         ${kpi('frozen', rows.filter((c) => c.frozen).length, 'kept for later', 'data-open="freezer"')}
         ${kpi('let go', bin.length, topCause ? `mostly: ${esc(CAUSES[topCause[0]])}` : 'nothing yet', 'data-open="bin"')}
+        ${kpi('focused this week', `${Math.round(m.focusWeek / 6) / 10} h`, m.focusWeek ? 'in focus sessions' : 'press ▶ resume on a project', 'data-act="pick"')}
       </div>
       <div class="dash-grid">
         ${card('fading', "who's fading", `days since you last touched each one. past ${m.settings.sleepDays} days they nap, past ${m.settings.ghostDays} they turn into ghosts.`, 'wide')}
@@ -158,7 +163,8 @@ export function createDashboard(app) {
             ${thumbSlot(c, 34)}
             <div class="grow">
               <button class="link strong" data-props="${c.key}">${esc(c.name)}</button> ${status(c)}
-              <div class="muted">${next ? `next: ${esc(short(next, 70))}` : `touched ${ago(c.p.lastTouched)} · no checklist yet`}</div>
+              <div class="muted">${next ? `next: ${esc(short(next, 70))}` : `touched ${ago(c.lastActive)} · no checklist yet`}</div>
+              ${c.note ? `<div class="muted">✉ ${esc(short(c.note.text, 80))}</div>` : ''}
             </div>
             <button class="btn small" data-desk-off="${c.id}">take off</button>
           </li>`);
@@ -481,6 +487,10 @@ export function createDashboard(app) {
     let el;
     if (on('[data-act=back]')) return app.showView('studio');
     if (on('[data-act=rescan]')) return app.rescan();
+    if (on('[data-act=pick]')) return app.ui.pickForMe(t);
+    if (on('[data-act=sort]')) return app.ui.sortEggs(t);
+    if (on('[data-act=meeting]')) return app.ui.townMeeting(t);
+    if (on('[data-act=ask]')) return app.ui.ask(t);
     if ((el = on('[data-stage]'))) {
       f.stage = f.stage === el.dataset.stage && el.closest('svg') ? 'all' : el.dataset.stage;
       return render();
@@ -517,6 +527,12 @@ export function createDashboard(app) {
     if ((el = on('[data-props]') || on('[data-key]') || on('[data-row]'))) {
       return app.ui.props(el.dataset.props || el.dataset.key || el.dataset.row, el);
     }
+  });
+  root.addEventListener('contextmenu', (e) => {
+    const el = e.target.closest?.('[data-row], [data-key], [data-props]');
+    if (!el) return;
+    e.preventDefault();
+    app.ui.menuFor(byKey(el.dataset.row || el.dataset.key || el.dataset.props), e.clientX, e.clientY);
   });
   root.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter') return;

@@ -1,14 +1,22 @@
 {
   "name": "brainchildren",
   "version": "0.1.0",
-  "description": "your project ideas, living on a tiny desktop. a local app that watches your project folders and turns each one into a little creature.",
+  "description": "your project ideas, living in a tiny pixel studio. a local app that turns each project folder into a little pixel person.",
   "type": "module",
   "private": true,
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js --no-open"
+    "dev": "node server.js --no-open",
+    "add": "node cli.js add",
+    "status": "node cli.js status"
   },
   "engines": {
     "node": ">=18.17"
+  },
+  "bin": {
+    "brainchildren": "cli.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.131.0"
   }
 }

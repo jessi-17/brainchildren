@@ -11,6 +11,9 @@ import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { openStore } from './lib/store.js';
 import { scanRoots, suggestRoots, isDir } from './lib/scan.js';
+import { autostartStatus, setAutostart, notify, findRunning, writeLock } from './lib/presence.js';
+import { createAI, AIError, MODELS } from './lib/ai.js';
+import { createFeatures } from './lib/ai-features.js';
 
 const APP_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(APP_DIR, 'public');
@@ -29,10 +32,30 @@ const MAX_DESK = 3;
 const CAUSES = ['too-big', 'lost-interest', 'someone-built-it', 'merged', 'did-its-job', 'other'];
 const { version: VERSION } = JSON.parse(await fs.readFile(path.join(APP_DIR, 'package.json'), 'utf8'));
 
+// one copy per data folder: if brainchildren is already running, just open it
+const running = await findRunning(DATA_DIR);
+if (running) {
+  const url = `http://127.0.0.1:${running.port}`;
+  console.log(`\n  ✿ brainchildren is already running → ${url}\n`);
+  if (OPEN_BROWSER) openInBrowser(url);
+  process.exit(0);
+}
+
 const store = await openStore(DATA_DIR);
 const db = store.data;
 let port = FIRST_PORT;
 let scanning = null;
+
+// optional AI with your own key (see lib/ai.js)
+const ai = createAI({ appDir: APP_DIR, dataDir: DATA_DIR, settings: () => db.settings, save: () => store.save() });
+const features = createFeatures({ ai, db, save: () => store.save() });
+let aiInfo = { hasKey: false, sdk: false };
+const refreshAI = async () => {
+  const st = await ai.status();
+  aiInfo = { hasKey: st.hasKey, sdk: st.sdk, keySource: st.keySource };
+  return st;
+};
+refreshAI();
 
 // ---------------------------------------------------------------- scanning
 
@@ -75,6 +98,10 @@ function state() {
       .filter(([id, m]) => !ids.has(id) && m.letGo && m.snapshot)
       .map(([id, m]) => ({ id, ...m.snapshot, meta: m, gone: true })),
     ideas: db.ideas,
+    wall: db.wall,
+    autostart: autostartOn,
+    aiReady: !!(db.settings.ai.on && aiInfo.hasKey && aiInfo.sdk),
+    aiInfo,
   };
 }
 
@@ -91,6 +118,17 @@ const routes = [
   ['DELETE', /^\/api\/ideas\/([\w-]{8,40})$/, deleteIdea],
   ['PATCH', /^\/api\/projects\/([0-9a-f]{12})$/, patchProject],
   ['POST', /^\/api\/projects\/([0-9a-f]{12})\/reveal$/, revealProject],
+  ['POST', /^\/api\/prefs$/, savePrefs],
+  ['POST', /^\/api\/autostart$/, toggleAutostart],
+  ['POST', /^\/api\/nudge\/test$/, testNudge],
+  ['POST', /^\/api\/wall$/, addWall],
+  ['PATCH', /^\/api\/wall\/([\w-]{8,40})$/, patchWall],
+  ['DELETE', /^\/api\/wall\/([\w-]{8,40})$/, deleteWall],
+  ['GET', /^\/api\/ai$/, () => refreshAI()],
+  ['POST', /^\/api\/ai\/settings$/, aiSettings],
+  ['POST', /^\/api\/ai\/key$/, aiKey],
+  ['POST', /^\/api\/ai\/test$/, aiTest],
+  ['POST', /^\/api\/ai\/run\/([a-z]{2,12})$/, aiRun],
 ];
 
 async function partsManifest() {
@@ -166,6 +204,11 @@ async function patchIdea(req, [, id]) {
   if ('note' in body) idea.note = str(body.note, 4000);
   if ('lookSeed' in body) idea.lookSeed = clampInt(body.lookSeed, 0, 1e6, 0);
   if ('snoozeUntil' in body) idea.snoozeUntil = Number(body.snoozeUntil) || undefined;
+  if ('pinned' in body) {
+    const pinned = db.ideas.filter((i) => i.pinned && i.id !== idea.id);
+    if (body.pinned && pinned.length >= 4) throw httpError(409, 'the board fits 4 pinned eggs. unpin one first');
+    idea.pinned = !!body.pinned || undefined;
+  }
   if ('projectId' in body) {
     if (body.projectId === null) {
       idea.projectId = null;
@@ -233,6 +276,35 @@ async function patchProject(req, [, id]) {
       addEvent(m, 'let-go', { cause: m.letGo.cause });
     } else addEvent(m, 'restored');
   }
+  if ('ignored' in body) {
+    m.ignored = !!body.ignored || undefined;
+    if (m.ignored) m.onDesk = false;
+  }
+  if ('addNote' in body) {
+    const text = str(body.addNote, 600);
+    if (text) {
+      m.notes = [...(m.notes || []), { t: Date.now(), text }].slice(-30);
+      m.lastNote = Date.now();
+    }
+  }
+  if ('deleteNote' in body) m.notes = (m.notes || []).filter((n) => n.t !== Number(body.deleteNote));
+  if ('readNote' in body) m.noteReadAt = Date.now();
+  if ('focus' in body) {
+    if (body.focus === 'start') {
+      m.focusStart = Date.now();
+      m.lastFocus = Date.now();
+    } else if (body.focus === 'end' && m.focusStart) {
+      const minutes = Math.max(1, Math.round((Date.now() - m.focusStart) / 60000));
+      m.sessions = [...(m.sessions || []), { t: m.focusStart, minutes: Math.min(minutes, 600) }].slice(-200);
+      m.lastFocus = Date.now();
+      m.focusStart = undefined;
+    } else if (body.focus === 'cancel') m.focusStart = undefined;
+  }
+  if ('traits' in body) m.traits = cleanTraits(body.traits);
+  if ('stepDone' in body && m.ai?.steps?.items) {
+    const step = m.ai.steps.items[clampInt(body.stepDone, 0, 20, 0)];
+    if (step) step.done = !!body.done;
+  }
   if ('onDesk' in body) {
     if (body.onDesk) {
       if (m.letGo || m.frozen) throw httpError(409, 'bring it back first');
@@ -258,6 +330,229 @@ async function revealProject(req, [, id]) {
     : ['xdg-open', [p.path]];
   execFile(cmd, args, { windowsHide: true }, () => {});
   return { ok: true };
+}
+
+// ---------------------------------------------------------------- preferences (no rescan)
+
+const WALLS = ['lilac', 'mint', 'peach', 'sky', 'butter', 'cocoa'];
+const FLOORS = ['wood', 'checker', 'carpet', 'tatami'];
+const VIEWS = ['city', 'beach', 'mountains', 'rain', 'stars', 'space', 'garden'];
+const LIGHTS = ['real', 'day', 'golden', 'night'];
+
+async function savePrefs(req) {
+  const body = await readBody(req);
+  const s = db.settings;
+  if ('name' in body) s.name = str(body.name, 40);
+  if ('editor' in body && ['vscode', 'cursor', 'windsurf', 'vscodium'].includes(body.editor)) s.editor = body.editor;
+  if ('chatter' in body && ['lots', 'some', 'quiet'].includes(body.chatter)) s.chatter = body.chatter;
+  if ('voice' in body && ['sweet', 'sassy', 'quiet'].includes(body.voice)) s.voice = body.voice;
+  if ('look' in body && ['pixel', 'doodle'].includes(body.look)) s.look = body.look;
+  if ('ambience' in body && ['off', 'rain', 'radio'].includes(body.ambience)) s.ambience = body.ambience;
+  if ('focusMinutes' in body) s.focusMinutes = clampInt(body.focusMinutes, 5, 120, 25);
+  if (body.nudge && typeof body.nudge === 'object') {
+    const n = s.nudge;
+    if ('on' in body.nudge) n.on = !!body.nudge.on;
+    if ('day' in body.nudge) n.day = clampInt(body.nudge.day, 0, 6, 1);
+    if ('hour' in body.nudge) n.hour = clampInt(body.nudge.hour, 0, 23, 10);
+  }
+  if (body.studio && typeof body.studio === 'object') {
+    const st = s.studio;
+    const b = body.studio;
+    if ('name' in b) st.name = str(b.name, 32);
+    if ('boardText' in b) st.boardText = str(b.boardText, 140);
+    if ('me' in b) st.me = b.me === null ? null : cleanTraits(b.me);
+    if (b.style && typeof b.style === 'object') {
+      if (WALLS.includes(b.style.wall)) st.style.wall = b.style.wall;
+      if (FLOORS.includes(b.style.floor)) st.style.floor = b.style.floor;
+      if (VIEWS.includes(b.style.view)) st.style.view = b.style.view;
+      if (LIGHTS.includes(b.style.light)) st.style.light = b.style.light;
+    }
+    if ('cat' in b) st.cat = !!b.cat;
+  }
+  await store.save();
+  return state();
+}
+
+const TRAIT_KEYS = ['skin', 'style', 'variant', 'hat', 'hatColor', 'hairColor', 'outfit', 'top', 'accent', 'bottomKind', 'bottom', 'shoe', 'socks', 'sleeves', 'print', 'tie', 'glasses', 'glassesColor', 'phones', 'phonesColor', 'bow', 'bowColor', 'beard', 'freckles', 'blush', 'pom'];
+function cleanTraits(t) {
+  if (!t || typeof t !== 'object') return undefined;
+  const out = {};
+  for (const k of TRAIT_KEYS) {
+    if (!(k in t)) continue;
+    const v = t[k];
+    if (v === null || typeof v === 'boolean') out[k] = v;
+    else if (typeof v === 'number' && Number.isFinite(v)) out[k] = Math.round(v);
+    else if (typeof v === 'string' && /^[#\w-]{1,24}$/.test(v)) out[k] = v;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+// ---------------------------------------------------------------- the wall: sticky notes + polaroids
+
+async function addWall(req) {
+  const body = await readBody(req);
+  if (db.wall.length >= 16) throw httpError(409, 'the wall is full (16 things). take something down first');
+  const item = wallItem({ id: crypto.randomUUID() }, body);
+  if (item.kind === 'note' && !item.text) throw httpError(400, 'a sticky note needs some words');
+  if (item.kind === 'photo' && !item.src) throw httpError(400, "that picture didn't come through");
+  db.wall.push(item);
+  await store.save();
+  return state();
+}
+
+async function patchWall(req, [, id]) {
+  const item = db.wall.find((w) => w.id === id);
+  if (!item) throw httpError(404, 'no such thing on the wall');
+  wallItem(item, await readBody(req));
+  await store.save();
+  return state();
+}
+
+async function deleteWall(req, [, id]) {
+  db.wall = db.wall.filter((w) => w.id !== id);
+  await store.save();
+  return state();
+}
+
+function wallItem(item, b) {
+  if (!item.kind) item.kind = b.kind === 'photo' ? 'photo' : 'note';
+  if ('text' in b) item.text = str(b.text, 120);
+  if ('color' in b && /^#[0-9a-f]{6}$/i.test(b.color)) item.color = b.color;
+  if ('x' in b) item.x = clampInt(b.x, 0, 2000, 0);
+  if ('y' in b) item.y = clampInt(b.y, 0, 1000, 0);
+  if ('tilt' in b) item.tilt = clampInt(b.tilt, -8, 8, 0);
+  if (item.kind === 'photo' && typeof b.src === 'string' && /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(b.src) && b.src.length < 90000) item.src = b.src;
+  return item;
+}
+
+// ---------------------------------------------------------------- staying present
+
+let autostartOn = await autostartStatus();
+
+async function toggleAutostart(req) {
+  const body = await readBody(req);
+  autostartOn = await setAutostart(!!body.on, { serverPath: fileURLToPath(import.meta.url), dataDir: DATA_DIR, defaultDataDir: path.join(APP_DIR, 'data') });
+  return state();
+}
+
+function nudgeText() {
+  const now = Date.now();
+  const s = db.settings;
+  const live = db.cache.projects.filter((p) => {
+    const m = db.meta[p.id] || {};
+    return !m.letGo && !m.frozen && !m.ignored;
+  });
+  const days = (p) => Math.floor((now - Math.max(p.lastTouched, db.meta[p.id]?.lastFocus || 0)) / DAY);
+  const ghosts = live.filter((p) => days(p) >= s.ghostDays && !(db.meta[p.id]?.snoozeUntil > now));
+  const napping = live.filter((p) => days(p) >= s.sleepDays && days(p) < s.ghostDays);
+  const eggs = db.ideas.filter((i) => !i.projectId && !i.letGo && !i.frozen);
+  const cold = eggs.filter((i) => (now - i.createdAt) / DAY >= s.ghostDays);
+  const desk = live.filter((p) => db.meta[p.id]?.onDesk);
+  const bits = [];
+  if (ghosts.length) bits.push(`${ghosts.length} ghost${ghosts.length === 1 ? '' : 's'}`);
+  if (napping.length) bits.push(`${napping.length} napping`);
+  if (cold.length) bits.push(`${cold.length} cold egg${cold.length === 1 ? '' : 's'}`);
+  else if (eggs.length) bits.push(`${eggs.length} egg${eggs.length === 1 ? '' : 's'} waiting`);
+  const first = desk[0];
+  const next = first?.todos?.open?.[0]?.text;
+  const deskLine = first ? `desk: ${(db.meta[first.id]?.nickname || first.title || first.folder)}${next ? ` (next: ${next})` : ''}` : 'your desk is empty. pick something to focus on';
+  return { title: bits.length ? `your studio: ${bits.join(', ')}` : 'your studio is doing fine ✿', body: deskLine.slice(0, 180) };
+}
+
+async function testNudge() {
+  const { title, body } = nudgeText();
+  const ok = await notify(title, body, `http://127.0.0.1:${port}`);
+  return { ok };
+}
+
+// the weekly nudge: checked every 10 minutes, sent once on the chosen day after the chosen hour
+setInterval(async () => {
+  const n = db.settings.nudge;
+  if (!n.on) return;
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  if (now.getDay() !== n.day || now.getHours() < n.hour || (n.lastSent || 0) >= today) return;
+  n.lastSent = Date.now();
+  await store.save();
+  const { title, body } = nudgeText();
+  notify(title, body, `http://127.0.0.1:${port}`);
+}, 10 * 60 * 1000).unref();
+
+// ideas added from the terminal ("brainchildren add …") land in data/inbox.jsonl
+const INBOX = path.join(DATA_DIR, 'inbox.jsonl');
+async function importInbox() {
+  const claimed = `${INBOX}.${process.pid}.processing`;
+  try {
+    await fs.rename(INBOX, claimed);
+  } catch {
+    return;
+  }
+  const text = await fs.readFile(claimed, 'utf8').catch(() => '');
+  let added = 0;
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const j = JSON.parse(line);
+      const title = str(j.title, 80);
+      if (!title) continue;
+      db.ideas.push({ id: crypto.randomUUID(), title, note: str(j.note, 4000), source: 'terminal', createdAt: Number(j.t) || Date.now(), projectId: null, frozen: false, letGo: null, lookSeed: 0 });
+      added++;
+    } catch {}
+  }
+  await fs.rm(claimed, { force: true });
+  if (added) await store.save();
+}
+importInbox();
+setInterval(importInbox, 3000).unref();
+
+// ---------------------------------------------------------------- AI routes
+
+async function aiSettings(req) {
+  const body = await readBody(req);
+  const a = db.settings.ai;
+  if ('on' in body) a.on = !!body.on;
+  if ('model' in body && MODELS[body.model]) a.model = body.model;
+  if (body.features && typeof body.features === 'object') {
+    for (const [k, v] of Object.entries(body.features)) if (k in a.features) a.features[k] = !!v;
+  }
+  await store.save();
+  await refreshAI();
+  return state();
+}
+
+async function aiKey(req) {
+  const body = await readBody(req);
+  try {
+    await ai.setKey(typeof body.key === 'string' ? body.key.trim() : null);
+  } catch (err) {
+    throw aiHttp(err);
+  }
+  await refreshAI();
+  return state();
+}
+
+async function aiTest() {
+  try {
+    return await ai.test();
+  } catch (err) {
+    throw aiHttp(err);
+  }
+}
+
+async function aiRun(req, [, name]) {
+  const body = await readBody(req);
+  try {
+    const out = await features.run(name, body.args || {}, { preview: !!body.preview });
+    return { ...out, state: out.preview ? undefined : state() };
+  } catch (err) {
+    throw aiHttp(err);
+  }
+}
+
+function aiHttp(err) {
+  if (err instanceof AIError) return httpError(err.code === 'off' || err.code === 'needs-sdk' ? 409 : 400, err.message, { code: err.code });
+  if (err.status) return err;
+  return httpError(400, err.message || 'something went wrong');
 }
 
 function letGoValue(v) {
@@ -356,6 +651,7 @@ const server = http.createServer(async (req, res) => {
   if (origin && !hosts.some((h) => origin === `http://${h}`)) return send(res, 403, { error: 'wrong origin' });
 
   const { pathname } = new URL(req.url, `http://${req.headers.host}`);
+  if (pathname === '/__brainchildren') return send(res, 200, { app: 'brainchildren', version: VERSION });
   try {
     if (pathname.startsWith('/api/')) {
       if (req.headers['x-bc-token'] !== TOKEN) return send(res, 401, { error: 'stale-token' });
@@ -381,6 +677,10 @@ function listen(p, tries = 0) {
   });
   server.listen(p, '127.0.0.1', () => {
     port = p;
+    writeLock(DATA_DIR, port).then((clear) => {
+      process.on('exit', clear);
+      for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => process.exit(0));
+    });
     const url = `http://127.0.0.1:${port}`;
     console.log(`\n  ✿ brainchildren ${VERSION} is running\n  → ${url}\n\n  only this computer can see it. press Ctrl+C to stop.\n`);
     if (OPEN_BROWSER) openInBrowser(url);

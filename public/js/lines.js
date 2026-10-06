@@ -25,7 +25,7 @@ const KIND_LINES = {
   code: ['it works on my machine', 'no bugs here (probably)'],
 };
 
-export function soloLine(c, ctx) {
+function sweetLine(c, ctx) {
   const pool = [];
   const add = (w, ...lines) => lines.forEach((l) => l && pool.push([w, l]));
   const user = ctx.user;
@@ -124,4 +124,50 @@ export function conversation(a, b, ctx) {
   add(1, [[a, `hi ${name(b)}!`], [b, `hi ${name(a)}!`]]);
   add(2, [[a, `seen ${user} today?`], [b, b.days === 0 ? 'yes! they were just here' : `not since ${weekday(b.p.lastTouched)}`]]);
   return pickWeighted(pool);
+}
+
+// ---------------------------------------------------------------- voices
+
+// the studio's chatter personality (settings: sweet, sassy or quiet), plus
+// lines AI wrote for this person, when you've asked for them
+export function soloLine(c, ctx) {
+  const lines = c.meta?.ai?.voice?.lines;
+  if (lines?.length && Math.random() < 0.45) return lines[Math.floor(Math.random() * lines.length)];
+  if (ctx.voice === 'quiet' && Math.random() < 0.75) return quietLine(c);
+  if (ctx.voice === 'sassy' && Math.random() < 0.6) return sassyLine(c, ctx) || sweetLine(c, ctx);
+  return sweetLine(c, ctx);
+}
+
+function quietLine(c) {
+  const by = {
+    egg: ['…', '*wobble*'],
+    cold: ['brr', '…'],
+    lively: ['♪', 'mm!', ':)'],
+    awake: ['hi', 'mm', '…'],
+    bored: ['…', 'hm'],
+    asleep: ['zz', 'z'],
+    ghost: ['…hello?', '…'],
+  }[c.energy] || ['…'];
+  return by[Math.floor(Math.random() * by.length)];
+}
+
+function sassyLine(c, ctx) {
+  const pool = [];
+  const add = (w, ...lines) => lines.forEach((l) => l && pool.push([w, l]));
+  const user = ctx.user;
+  if (c.type === 'egg') {
+    add(3, "hatch me or don't. i'm an egg, i can wait", 'still an egg. thrilling.');
+    if (c.energy === 'cold') add(5, "it's freezing in here, thanks for asking", 'cold egg. cold heart.');
+    return pickWeighted(pool);
+  }
+  if (c.energy === 'lively') add(3, 'finally, some attention', "keep going, i'm thriving", `${user} has taste`);
+  if (c.energy === 'awake') add(3, 'you could visit more. just saying', "i'm fine. FINE.");
+  if (c.energy === 'bored') add(4, `${c.days} days. cool cool cool`, "i'm not mad. i'm just dusty", 'is this what being a side project feels like');
+  if (c.energy === 'asleep') add(4, "zzz… don't wake me unless it's a deploy", 'zzz… (dreaming of a README)');
+  if (c.energy === 'ghost') add(5, 'oh, NOW you remember me?', 'boo. that one was for you', `${c.days} days, ${user}. ${c.days}.`);
+  if (c.onDesk) add(3, 'desk life. very important project', 'shh, i’m in a meeting with myself');
+  if (c.stage === 'shipped') add(3, "i'm live. you may now applaud");
+  if (c.p?.todos?.openCount) add(2, `${c.p.todos.openCount} things on my list and i'm doing none of them`);
+  if (c.p?.files === 0) add(4, 'an empty folder. very minimalist of you');
+  return pool.length ? pickWeighted(pool) : null;
 }

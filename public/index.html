@@ -15,9 +15,11 @@
   <main id="desktop" class="desktop" aria-label="brainchildren">
     <div id="world" class="world" aria-label="your studio"></div>
     <button id="status" class="studio-status" hidden></button>
+    <div id="practice-banner" class="practice-banner" hidden><b>practice studio</b> <span>made-up projects · nothing here is real</span><button class="btn small" data-p="walk">▶ walkthrough</button><button class="btn small primary" data-p="exit">exit practice</button></div>
     <section id="dashboard" class="dash" hidden></section>
     <div id="windows" class="windows"></div>
     <div id="balloons" class="balloons" aria-live="polite"></div>
+    <div id="toasts" class="toasts" aria-live="polite"></div>
     <p id="empty-hint" class="empty-hint" hidden></p>
   </main>
 
@@ -30,6 +32,7 @@
     <div class="desk-label" aria-hidden="true">★ desk</div>
     <div id="desk" class="desk-slots" aria-label="your desk: up to three projects in focus"></div>
     <div id="tray" class="tray">
+      <button id="focus-pill" class="focus-pill" hidden></button>
       <button id="tray-ghosts" class="tray-ghosts" hidden></button>
       <span id="tray-scan" class="tray-scan" hidden>scanning…</span>
       <button id="tray-time" class="tray-time" hidden></button>

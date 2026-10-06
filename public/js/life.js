@@ -68,7 +68,10 @@ export function buildModel(s) {
 
   for (const p of s.projects) {
     const m = p.meta || {};
-    const days = daysSince(p.lastTouched, now);
+    // working on it in brainchildren (a focus session, a note) counts as touching it
+    const lastActive = Math.max(p.lastTouched, m.lastFocus || 0, m.lastNote || 0);
+    const days = daysSince(lastActive, now);
+    const note = m.notes?.length ? m.notes[m.notes.length - 1] : null;
     const c = {
       key: `p:${p.id}`,
       id: p.id,
@@ -85,8 +88,16 @@ export function buildModel(s) {
       egg: eggOf.get(p.id) || null,
       letGo: m.letGo || null,
       frozen: !!m.frozen && !m.letGo,
+      ignored: !!m.ignored,
+      lastActive,
+      note,
+      // past you left a note at least 3 days ago that you haven't read since
+      letter: note && now - note.t >= 3 * DAY && (m.noteReadAt || 0) < note.t ? note : null,
+      brand: p.brand || null,
+      traits: m.traits || null,
+      focusMinutes: (m.sessions || []).reduce((sum, x) => sum + (now - x.t < 7 * DAY ? x.minutes : 0), 0),
     };
-    c.onDesk = !!m.onDesk && !c.letGo && !c.frozen;
+    c.onDesk = !!m.onDesk && !c.letGo && !c.frozen && !c.ignored;
     c.needsVisit = c.energy === 'ghost' && !c.frozen && !c.letGo && !(m.snoozeUntil > now);
     creatures.push(c);
   }
@@ -134,7 +145,10 @@ export function buildModel(s) {
     });
   }
 
-  const live = creatures.filter((c) => !c.frozen && !c.letGo && !c.gone);
+  const live = creatures.filter((c) => !c.frozen && !c.letGo && !c.gone && !c.ignored);
+  const bin = creatures.filter((c) => c.letGo).sort((a, b) => b.letGo.at - a.letGo.at);
+  const projects = creatures.filter((c) => c.type === 'project' && !c.gone);
+  const revived = projects.reduce((n, c) => n + (c.meta.events || []).filter((e) => e.type === 'revived').length, 0);
   return {
     now,
     settings,
@@ -144,9 +158,19 @@ export function buildModel(s) {
     live,
     // desks keep the order people sat down in, so nobody swaps seats
     desk: live.filter((c) => c.onDesk).sort((a, b) => deskSince(a) - deskSince(b)),
-    bin: creatures.filter((c) => c.letGo).sort((a, b) => b.letGo.at - a.letGo.at),
-    freezer: creatures.filter((c) => c.frozen),
+    bin,
+    freezer: creatures.filter((c) => c.frozen && !c.ignored),
+    hidden: creatures.filter((c) => c.ignored),
     visits: live.filter((c) => c.needsVisit),
+    pinned: live.filter((c) => c.type === 'egg' && c.idea.pinned),
+    // decor you earn: a trophy per shipped project, a plant that grows with
+    // every revived ghost, a lessons book per 5 ideas let go
+    earned: {
+      trophies: projects.filter((c) => c.meta.shipped && !c.letGo).length,
+      plant: Math.min(5, revived),
+      books: Math.floor(bin.length / 5),
+    },
+    focusWeek: projects.reduce((n, c) => n + c.focusMinutes, 0),
     byKey: new Map(creatures.map((c) => [c.key, c])),
   };
 }
@@ -199,7 +223,7 @@ export function ago(t, now = clock.now()) {
 export const fmtDate = (t) => new Date(t).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: new Date(t).getFullYear() === new Date().getFullYear() ? undefined : 'numeric' });
 export const fmtTime = (t) => new Date(t).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }).replace(/\s/g, '').toLowerCase();
 export const weekday = (t) => new Date(t).toLocaleDateString(undefined, { weekday: 'long' }).toLowerCase();
-export const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+export const plural = (n, word, many) => `${n} ${n === 1 ? word : many || `${word}s`}`;
 export const short = (s, n = 36) => {
   const str = String(s || '');
   return str.length > n ? `${str.slice(0, n - 1).replace(/\s+\S*$/, '')}…` : str;

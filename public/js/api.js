@@ -2,7 +2,12 @@
 // websites open in your browser can't talk to brainchildren.
 const token = document.querySelector('meta[name="bc-token"]')?.content || '';
 
+// in the practice studio, calls go to a pretend server in this tab instead
+let practice = null;
+export const usePractice = (server) => (practice = server);
+
 async function call(method, url, body) {
+  if (practice) return practice(method, url, body);
   const res = await fetch(url, {
     method,
     headers: { 'x-bc-token': token, ...(body ? { 'content-type': 'application/json' } : {}) },

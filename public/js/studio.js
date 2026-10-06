@@ -2,12 +2,14 @@
 // sit and type, napping ones take the sofa (or the rug), ghosts float,
 // eggs wait in the nest, and everyone else wanders and chats.
 // The room's objects are buttons: whiteboard, fridge, bin, calendar…
-import { SPRITE_W, SPRITE_H, FEET_Y, WAIST_Y } from './pixelfolk.js';
-import { layoutRoom, paintRoom } from './room.js';
+import { SPRITE_W, SPRITE_H, FEET_Y, WAIST_Y, person } from './pixelfolk.js';
+import { layoutRoom, paintRoom, roomPhase } from './room.js';
 import { creatureSvg } from './creature.js';
 import { personFrames, eggCanvas, lookStyle } from './look.js';
 import { soloLine, conversation } from './lines.js';
-import { STAGES, ENERGY, DAY, clock, ago, plural, rng } from './life.js';
+import { STAGES, ENERGY, DAY, clock, ago, plural, rng, esc, short } from './life.js';
+import { focusOn } from './focus.js';
+import { ambience } from './audio.js';
 
 const SPEED = { lively: 15, awake: 11, bored: 5, ghost: 4 };
 const FRAME_MS = { lively: 150, awake: 190, bored: 280 };
@@ -19,9 +21,14 @@ const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const SEAT_COVER = 16;
 
 export class Studio {
-  constructor(world, { onOpen, onHotspot, hotLabel }) {
+  constructor(world, { onOpen, onHotspot, hotLabel, onMenu, onMe, onWall, onPin }) {
     this.world = world;
     this.onOpen = onOpen;
+    this.onMenu = onMenu;
+    this.onMe = onMe;
+    this.onWall = onWall;
+    this.onPin = onPin;
+    this.gathering = false;
     this.onHotspot = onHotspot;
     this.hotLabel = hotLabel;
     this.items = new Map();
@@ -34,6 +41,7 @@ export class Studio {
       <div class="studio">
         <canvas class="room room-back" aria-hidden="true"></canvas>
         <div class="layer hotspots"></div>
+        <div class="layer overlays"></div>
         <div class="layer seated"></div>
         <canvas class="room room-front" aria-hidden="true"></canvas>
         <div class="layer walkers"></div>
@@ -46,6 +54,17 @@ export class Studio {
     this.seated = world.querySelector('.seated');
     this.walkers = world.querySelector('.walkers');
     this.hotLayer = world.querySelector('.hotspots');
+    this.overlays = world.querySelector('.overlays');
+    // right-click anyone (or a desk) for quick actions
+    this.el.addEventListener('contextmenu', (e) => {
+      const p = e.target.closest('.person[data-key]');
+      const desk = e.target.closest('[data-hot^="desk"]');
+      const key = p?.dataset.key || (desk && this.model?.desk[Number(desk.dataset.hot.slice(4))]?.key);
+      if (!key) return;
+      e.preventDefault();
+      if (key === 'me') return this.onMe?.(e);
+      this.onMenu?.(key, e.clientX, e.clientY);
+    });
     this.badge = world.querySelector('.nest-badge');
     this.label = world.querySelector('.hot-label');
     this.last = performance.now();
@@ -101,6 +120,8 @@ export class Studio {
     this.buildHotspots();
     this.paintKey = null;
     this.paint();
+    this.decoHtml = null;
+    if (this.model) this.syncDecor();
     for (const it of this.items.values()) {
       it.mode = null;
       if (this.model) this.place(it, it.c, this.assign);
@@ -150,14 +171,18 @@ export class Studio {
       fridgeCount: m.freezer.length,
       eggCount: m.live.filter((c) => c.type === 'egg').length,
       boardBars: boardBars(m),
+      style: m.settings.studio?.style,
+      earned: m.earned,
+      music: ambience() === 'radio',
     };
     const key = JSON.stringify({ ...state, now: `${now.getHours()}:${now.getMinutes()}` });
     if (!force && key === this.paintKey) return;
     this.paintKey = key;
     paintRoom(this.backCtx, this.frontCtx, this.layout, state);
-    const h = now.getHours() + now.getMinutes() / 60;
-    this.el.classList.toggle('night', h < 5.5 || h >= 20.75);
-    this.el.classList.toggle('dusk', h >= 19.5 && h < 20.75);
+    // people share the room's light (it can be forced in settings)
+    const phase = roomPhase(state);
+    this.el.classList.toggle('night', phase === 'night');
+    this.el.classList.toggle('dusk', phase === 'dusk');
   }
 
   // ------------------------------------------------------------ syncing
@@ -183,6 +208,9 @@ export class Studio {
     }
     this.paint();
     this.refreshHotLabels();
+    this.syncDecor();
+    this.syncMe();
+    this.syncCat();
     this.ready = true;
     if (!this.chatTimer) this.scheduleChat();
   }
@@ -192,6 +220,7 @@ export class Studio {
     el.className = 'person';
     el.tabIndex = 0;
     el.setAttribute('role', 'button');
+    el.dataset.key = c.key;
     el.innerHTML = '<div class="art"></div><div class="tag"><b></b><span></span></div>';
     const it = {
       key: c.key,
@@ -226,7 +255,7 @@ export class Studio {
   update(it, c) {
     it.c = c;
     const doodle = lookStyle() === 'doodle';
-    const sig = `${doodle}|${c.seed}|${c.stage}|${c.energy}|${c.kind}`;
+    const sig = `${doodle}|${c.seed}|${c.stage}|${c.energy}|${c.kind}|${JSON.stringify(c.traits || '')}|${c.brand?.color || ''}`;
     if (sig !== it.sig) {
       it.sig = sig;
       it.doodle = doodle;
@@ -246,6 +275,15 @@ export class Studio {
     cl.toggle('ghost', c.energy === 'ghost');
     cl.toggle('doodle', it.doodle);
     cl.toggle('on-desk', !!c.onDesk);
+    cl.toggle('has-letter', !!c.letter);
+    let env = it.el.querySelector('.letter-badge');
+    if (c.letter && !env) {
+      env = document.createElement('span');
+      env.className = 'letter-badge';
+      env.title = 'past you left a note';
+      env.textContent = '✉';
+      it.el.append(env);
+    } else if (!c.letter && env) env.remove();
     it.el.querySelector('.tag b').textContent = `${c.onDesk ? '★ ' : ''}${c.name}`;
     it.el.querySelector('.tag span').textContent = statusLine(c);
     it.el.setAttribute('aria-label', `${c.name}: ${statusLine(c)}. open properties`);
@@ -323,6 +361,8 @@ export class Studio {
       if (it.mode === 'wander' || it.mode === 'ghost') this.step(it, dt);
       this.draw(it, t);
     }
+    if (this.me) this.tickMe(dt, t);
+    if (this.cat) this.tickCat(dt, t);
   }
 
   step(it, dt) {
@@ -334,7 +374,12 @@ export class Studio {
       it.pause -= dt * 1000;
       return;
     }
-    if (it.tx === null) [it.tx, it.ty] = this.nextStop(it, zone);
+    if (it.tx === null) {
+      if (this.gathering && it.mode === 'wander' && it.meetSpot) {
+        if (Math.hypot(it.x - it.meetSpot.x, it.y - it.meetSpot.y) < 1) return;
+        [it.tx, it.ty] = [it.meetSpot.x, it.meetSpot.y];
+      } else [it.tx, it.ty] = this.nextStop(it, zone);
+    }
     const dx = it.tx - it.x;
     const dy = it.ty - it.y;
     const dist = Math.hypot(dx, dy);
@@ -454,7 +499,7 @@ export class Studio {
     const eggs = list.filter((it) => it.mode === 'egg');
     if (eggs.length && Math.random() < 0.4) this.flash(eggs[Math.floor(Math.random() * eggs.length)], 'wobble', 950);
     if (this.world.querySelectorAll('.bubble.show').length >= 2) return;
-    const ctx = { user: this.model.user, now: this.model.now };
+    const ctx = { user: this.model.user, now: this.model.now, voice: this.model.settings.voice };
     if (Math.random() < 0.32 && this.converse(list, ctx)) return;
     const weights = list.map((it) => (it.c.onDesk ? 3 : 1) * (it.c.energy === 'lively' ? 2 : 1));
     let r = Math.random() * weights.reduce((a, b) => a + b, 0);
@@ -516,7 +561,15 @@ export class Studio {
       it.el.append(bubble);
     }
     bubble.textContent = text;
-    requestAnimationFrame(() => bubble.classList.add('show'));
+    bubble.style.marginLeft = '0px';
+    requestAnimationFrame(() => {
+      // keep bubbles inside the room near the edges
+      const r = bubble.getBoundingClientRect();
+      const host = this.world.getBoundingClientRect();
+      const dx = r.right > host.right - 6 ? host.right - 6 - r.right : r.left < host.left + 6 ? host.left + 6 - r.left : 0;
+      bubble.style.marginLeft = `${dx}px`;
+      bubble.classList.add('show');
+    });
     clearTimeout(it.bubbleTimer);
     it.bubbleTimer = setTimeout(() => bubble.classList.remove('show'), Math.min(6500, 2600 + text.length * 40));
     const log = this.logs.get(it.key) || [];
@@ -558,6 +611,312 @@ export class Studio {
     if (!it) return;
     it.el.focus({ preventScroll: true });
     this.hop(key);
+  }
+
+  // ------------------------------------------------------------ the walls: sign, board, pins, notes, polaroids, desk screens
+
+  syncDecor() {
+    const m = this.model;
+    const L = this.layout;
+    const S = this.S;
+    if (!m || !L) return;
+    const st = m.settings.studio || {};
+    const box = (r) => `left:${r.x * S}px;top:${r.y * S}px;width:${r.w * S}px;height:${r.h * S}px`;
+    const parts = [];
+
+    const sign = L.sign;
+    if (sign) parts.push(`<div class="deco sign-text" style="${box(sign)};font-size:${Math.max(9, Math.min(sign.h * S * 0.62, (sign.w * S) / Math.max(6, (st.name || `${m.user}'s studio`).length) * 1.7))}px">${esc(st.name || `${m.user}'s studio`)}</div>`);
+
+    const board = L.boardText || this.fallbackBoard();
+    if (board && st.boardText) parts.push(`<div class="deco board-text" style="${box(board)};font-size:${Math.max(10, Math.min(board.h * S * 0.3, 22))}px">${esc(st.boardText)}</div>`);
+
+    const pins = L.boardPins || [];
+    m.pinned.slice(0, pins.length || 4).forEach((c, i) => {
+      const p = pins[i] || (board ? { x: board.x + i * 16, y: board.y + board.h + 2 } : null);
+      if (!p) return;
+      parts.push(`<button class="deco pin-note" data-pin="${c.key}" style="left:${p.x * S}px;top:${p.y * S}px;width:${14 * S}px;height:${12 * S}px" title="${esc(c.name)}">${esc(short(c.name, 22))}</button>`);
+    });
+
+    for (const w of m.state.wall || []) {
+      const style = `left:${(w.x ?? 20) * S}px;top:${(w.y ?? 20) * S}px;--tilt:${w.tilt || 0}deg`;
+      if (w.kind === 'photo') parts.push(`<div class="deco wall-photo" data-wall="${w.id}" style="${style};width:${18 * S}px"><img src="${w.src}" alt=""></div>`);
+      else parts.push(`<div class="deco wall-note" data-wall="${w.id}" style="${style};width:${16 * S}px;min-height:${14 * S}px;background:${w.color || '#fff3a8'};font-size:${Math.max(9, S * 2.4)}px">${esc(w.text)}</div>`);
+    }
+
+    // a project's favicon glows on the monitor while it sits at that desk
+    (L.desks || []).forEach((d, i) => {
+      const c = m.desk[i];
+      if (!d.screen || !c?.brand?.favicon) return;
+      parts.push(`<img class="deco desk-icon" src="${c.brand.favicon}" alt="" style="${box(d.screen)}">`);
+    });
+
+    const rec = this.layout.hotspots.find((h) => h.id === 'record');
+    if (rec && ambience() === 'radio') parts.push(`<div class="deco music-notes" style="left:${(rec.x + rec.w / 2) * S}px;top:${rec.y * S}px"><i>♪</i><i>♫</i></div>`);
+
+    const html = parts.join('');
+    if (html !== this.decoHtml) {
+      this.decoHtml = html;
+      this.overlays.innerHTML = html;
+    }
+    if (!this.decoWired) this.wireDecor();
+  }
+
+  fallbackBoard() {
+    const b = this.layout.hotspots.find((h) => h.id === 'board');
+    return b ? { x: b.x + 4, y: b.y + 4, w: Math.round(b.w * 0.5), h: Math.round(b.h * 0.4) } : null;
+  }
+
+  // a free spot on the wall for a new sticky note or polaroid (scene px)
+  freeWallSpot() {
+    const spots = this.layout.wallSpots || [];
+    const taken = (this.model?.state.wall || []).map((w) => ({ x: w.x, y: w.y }));
+    for (const s of spots) if (!taken.some((t) => Math.abs(t.x - s.x) < 10 && Math.abs(t.y - s.y) < 10)) return { x: s.x, y: s.y };
+    const n = taken.length;
+    return { x: 30 + (n % 6) * 22, y: 18 + Math.floor(n / 6) * 20 };
+  }
+
+  wireDecor() {
+    this.decoWired = true;
+    let drag = null;
+    this.overlays.addEventListener('pointerdown', (e) => {
+      const el = e.target.closest('[data-wall]');
+      if (!el || e.button !== 0) return;
+      e.preventDefault();
+      el.setPointerCapture(e.pointerId);
+      drag = { el, id: el.dataset.wall, sx: e.clientX, sy: e.clientY, x0: el.offsetLeft, y0: el.offsetTop, moved: false };
+    });
+    this.overlays.addEventListener('pointermove', (e) => {
+      if (!drag) return;
+      const dx = e.clientX - drag.sx;
+      const dy = e.clientY - drag.sy;
+      if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
+      drag.el.style.left = `${drag.x0 + dx}px`;
+      drag.el.style.top = `${drag.y0 + dy}px`;
+    });
+    const end = () => {
+      if (!drag) return;
+      const d = drag;
+      drag = null;
+      if (!d.moved) return;
+      const x = Math.max(0, Math.round(d.el.offsetLeft / this.S));
+      const y = Math.max(0, Math.min(this.layout.floorY - 8, Math.round(d.el.offsetTop / this.S)));
+      this.onWall?.('move', d.id, { x, y });
+    };
+    this.overlays.addEventListener('pointerup', end);
+    this.overlays.addEventListener('pointercancel', end);
+    this.overlays.addEventListener('dblclick', (e) => {
+      const el = e.target.closest('[data-wall]');
+      if (el) this.onWall?.('edit', el.dataset.wall, null, el);
+    });
+    this.overlays.addEventListener('click', (e) => {
+      const pin = e.target.closest('[data-pin]');
+      if (pin) this.onPin?.(pin.dataset.pin, pin);
+    });
+  }
+
+  // ------------------------------------------------------------ you
+
+  syncMe() {
+    const m = this.model;
+    const traits = m.settings.studio?.me || null;
+    const seed = this.meSeed?.() ?? 1;
+    const sig = `${seed}|${JSON.stringify(traits)}`;
+    if (!this.me) {
+      const el = document.createElement('div');
+      el.className = 'person me';
+      el.dataset.key = 'me';
+      el.tabIndex = 0;
+      el.setAttribute('role', 'button');
+      el.innerHTML = '<div class="art"><canvas></canvas></div><div class="tag"><b></b><span>that’s you</span></div>';
+      el.addEventListener('click', (e) => this.onMe?.(e));
+      const L = this.layout;
+      this.me = { el, canvas: el.querySelector('canvas'), x: (L.chair?.x ?? L.walk.left + 30), y: (L.chair?.y ?? L.walk.top + 6), tx: null, ty: null, mode: null, pause: 0, left: false };
+      this.walkers.append(el);
+    }
+    if (sig !== this.me.sig) {
+      this.me.sig = sig;
+      this.me.frames = person(seed, { mood: 'lively', stage: 'growing', traits });
+      this.me.drawn = null;
+    }
+    this.me.el.querySelector('.tag b').textContent = m.user;
+  }
+
+  // where you are: next to what you're focusing on or just edited, else in your chair
+  meTarget() {
+    const focus = focusOn();
+    const now = Date.now();
+    let target = focus && this.items.get(focus.key);
+    if (!target) {
+      let best = null;
+      for (const it of this.items.values()) {
+        if (it.c.type !== 'project' || it.mode === 'hidden') continue;
+        if (now - it.c.p.lastTouched < 15 * 60000 && (!best || it.c.p.lastTouched > best.c.p.lastTouched)) best = it;
+      }
+      target = best;
+    }
+    return target;
+  }
+
+  tickMe(dt, t) {
+    const me = this.me;
+    const L = this.layout;
+    const W = this.zone(L.walk);
+    const target = this.meTarget();
+    let mode;
+    let gx;
+    let gy;
+    if (target) {
+      mode = 'visit';
+      const side = target.x < (W.left + W.right) / 2 ? 1 : -1;
+      gx = clamp(target.x + side * (SPRITE_W - 4), W.left, W.right);
+      gy = clamp(['desk', 'sofa', 'egg'].includes(target.mode) ? W.top + 2 : target.y + 1, W.top, W.bottom);
+    } else if (L.chair) {
+      mode = 'chair';
+      [gx, gy] = [L.chair.x, L.chair.y];
+    } else {
+      mode = 'idle';
+      [gx, gy] = [W.left + 30, W.top + 8];
+    }
+    const dist = Math.hypot(gx - me.x, gy - me.y);
+    me.walking = false;
+    if (dist > 0.8 && !reduced.matches) {
+      const move = Math.min(dist, 16 * dt);
+      me.x += ((gx - me.x) / dist) * move;
+      me.y += ((gy - me.y) / dist) * move;
+      me.left = gx < me.x;
+      me.walking = true;
+    } else if (dist > 0.8) {
+      me.x = gx;
+      me.y = gy;
+    }
+    const seated = mode === 'chair' && !me.walking;
+    const layer = seated ? this.seated : this.walkers;
+    if (me.el.parentElement !== layer) layer.append(me.el);
+    const f = me.frames;
+    const frame = me.walking ? f.walk[Math.floor(t / 170) % 2] : seated ? f.stand : f.stand;
+    const S = this.S;
+    if (frame !== me.drawn) {
+      me.canvas.width = frame.width;
+      me.canvas.height = frame.height;
+      me.canvas.style.width = `${frame.width * S}px`;
+      me.canvas.style.height = `${frame.height * S}px`;
+      me.canvas.getContext('2d').drawImage(frame, 0, 0);
+      me.drawn = frame;
+    }
+    const w = frame.width * S;
+    const h = frame.height * S;
+    const feet = seated ? (WAIST_Y + SEAT_COVER) * S : FEET_Y * S;
+    const x = Math.round(me.x) * S - Math.round(w / 2);
+    const y = Math.round(me.y) * S - Math.round(feet);
+    me.el.style.transform = `translate(${x}px, ${y}px)`;
+    me.el.style.width = `${w}px`;
+    me.el.style.height = `${h}px`;
+    me.el.style.zIndex = Math.round(me.y) + 1;
+    me.el.querySelector('.art').style.transform = me.walking && me.left ? 'scaleX(-1)' : '';
+    me.el.dataset.mode = seated ? 'sofa' : 'wander';
+  }
+
+  // ------------------------------------------------------------ the studio cat
+
+  async syncCat() {
+    const want = this.model.settings.studio?.cat !== false;
+    if (!want) {
+      this.cat?.el.remove();
+      this.cat = null;
+      return;
+    }
+    if (this.cat || this.catLoading) return;
+    this.catLoading = true;
+    let mod;
+    try {
+      mod = await import('./cat.js');
+    } catch {
+      return; // the cat sprites aren't there (yet)
+    }
+    const frames = mod.cat(this.meSeed?.() ?? 7);
+    const el = document.createElement('div');
+    el.className = 'person cat';
+    el.dataset.key = 'cat';
+    el.innerHTML = '<div class="art"><canvas></canvas></div>';
+    el.addEventListener('click', () => {
+      this.flash(this.cat, 'hop', 520);
+      this.say(this.cat, ['mrrp', 'prrr…', '*slow blink*', 'mew'][Math.floor(Math.random() * 4)]);
+    });
+    this.cat = { el, canvas: el.querySelector('canvas'), frames, x: this.layout.walk.left + 40, y: this.layout.walk.bottom - 4, mode: 'nap', until: 0, key: 'cat', removing: false };
+    this.walkers.append(el);
+  }
+
+  // naps on the busiest desk; now and then strolls around the floor
+  tickCat(dt, t) {
+    const cat = this.cat;
+    const L = this.layout;
+    const now = performance.now();
+    const busiest = this.model.desk
+      .map((c, i) => ({ c, i }))
+      .filter(({ i }) => L.desks[i]?.cat)
+      .sort((a, b) => b.c.lastActive - a.c.lastActive)[0];
+    const napSpot = busiest ? L.desks[busiest.i].cat : L.naps?.[L.naps.length - 1];
+    if (now > cat.until) {
+      cat.mode = cat.mode === 'nap' ? 'stroll' : 'nap';
+      cat.until = now + (cat.mode === 'nap' ? 40000 + Math.random() * 50000 : 9000 + Math.random() * 8000);
+      const W = this.zone(L.walk);
+      cat.tx = cat.mode === 'nap' && napSpot ? napSpot.x : W.left + Math.random() * (W.right - W.left);
+      cat.ty = cat.mode === 'nap' && napSpot ? napSpot.y : W.top + Math.random() * (W.bottom - W.top);
+    }
+    const dist = Math.hypot(cat.tx - cat.x, cat.ty - cat.y);
+    const walking = dist > 0.8 && !reduced.matches;
+    if (walking) {
+      const move = Math.min(dist, 12 * dt);
+      cat.x += ((cat.tx - cat.x) / dist) * move;
+      cat.y += ((cat.ty - cat.y) / dist) * move;
+      cat.left = cat.tx < cat.x;
+    } else if (dist > 0.8) {
+      cat.x = cat.tx;
+      cat.y = cat.ty;
+    }
+    const onDesk = !walking && cat.mode === 'nap' && busiest;
+    const f = cat.frames;
+    const frame = walking ? f.walk[Math.floor(t / 160) % 2] : cat.mode === 'nap' ? f.sleep : f.sit;
+    const S = this.S;
+    if (frame !== cat.drawn) {
+      cat.canvas.width = frame.width;
+      cat.canvas.height = frame.height;
+      cat.canvas.style.width = `${frame.width * S}px`;
+      cat.canvas.style.height = `${frame.height * S}px`;
+      cat.canvas.getContext('2d').drawImage(frame, 0, 0);
+      cat.drawn = frame;
+    }
+    const w = frame.width * S;
+    const h = frame.height * S;
+    cat.el.style.transform = `translate(${Math.round(cat.x) * S - Math.round(w / 2)}px, ${Math.round(cat.y) * S - h}px)`;
+    cat.el.style.width = `${w}px`;
+    cat.el.style.height = `${h}px`;
+    // on a desk it sits on the desk top, so it belongs above the front layer
+    cat.el.style.zIndex = onDesk ? 9000 : Math.round(cat.y);
+    cat.el.querySelector('.art').style.transform = cat.left ? 'scaleX(-1)' : '';
+  }
+
+  // ------------------------------------------------------------ town meeting: everyone gathers at the whiteboard
+
+  meeting(on) {
+    this.gathering = !!on;
+    const L = this.layout;
+    const board = L.hotspots.find((h) => h.id === 'board');
+    const W = this.zone(L.walk);
+    const spots = L.meeting?.length
+      ? L.meeting
+      : Array.from({ length: 12 }, (_, i) => ({ x: clamp((board ? board.x + board.w / 2 : (W.left + W.right) / 2) + ((i % 6) - 2.5) * (SPRITE_W - 2), W.left, W.right), y: W.top + 3 + Math.floor(i / 6) * 9 }));
+    let n = 0;
+    for (const it of this.items.values()) {
+      if (it.mode !== 'wander') continue;
+      it.meetSpot = on ? spots[n++ % spots.length] : null;
+      it.tx = null;
+      it.pause = on ? Math.random() * 600 : 800;
+    }
+    if (on) {
+      const speaker = [...this.items.values()].find((it) => it.c.onDesk) || [...this.items.values()].find((it) => it.mode === 'wander');
+      if (speaker) setTimeout(() => this.say(speaker, 'order, order! town meeting ✿'), 900);
+    }
   }
 
   // for the guided tour

@@ -4,6 +4,8 @@ import { api } from './api.js';
 import { openWindow, balloon, closeWindow } from './wm.js';
 import { icons } from './icons.js';
 import { thumbHtml } from './look.js';
+import { resume } from './focus.js';
+import { undoable } from './undo.js';
 import {
   STAGES, ENERGY, CAUSES, KIND_NOUNS, DAY, clock, esc, ago, fmtDate, fmtTime, plural, short,
   similarity, projectWords, eggWords,
@@ -39,36 +41,6 @@ export function createApps(app) {
 
   // ------------------------------------------------------------ shared actions
 
-  ui.desk = async (c, on, from) => {
-    try {
-      app.setState(await patchProject(c, { onDesk: on }));
-      if (on) app.habitat.hop(c.key, "i'm on the desk ★");
-    } catch (err) {
-      if (err.data?.error === 'desk-full') ui.deskFull(c, from);
-      else app.oops(err);
-    }
-  };
-
-  ui.freeze = (c) =>
-    app.run(async () => {
-      closeWindow(`props:${c.key}`);
-      closeWindow(`visit:${c.key}`);
-      app.setState(await patch(c, { frozen: true }));
-      balloon({ title: `🧊 ${c.name} is in the freezer`, text: "kept safe, but out of the way. thaw it whenever you're ready.", onClick: () => ui.freezer() });
-    });
-
-  ui.thaw = (c) =>
-    app.run(async () => {
-      app.setState(await patch(c, { frozen: false }));
-      app.habitat.hop(c.key, 'brrr! hi again');
-    });
-
-  ui.restore = (c) =>
-    app.run(async () => {
-      app.setState(await patch(c, { letGo: null }));
-      app.habitat.hop(c.key, "i'm back!");
-    });
-
   ui.newLook = (c) =>
     app.run(async () => {
       const seed = ((c.type === 'egg' ? c.idea.lookSeed : c.meta.lookSeed) || 0) + 1;
@@ -103,7 +75,7 @@ export function createApps(app) {
     }
   };
 
-  ui.reveal = (c) => app.run(() => api.post(`/api/projects/${c.id}/reveal`));
+  ui.reveal = (c) => (app.practice ? balloon({ title: 'in your real studio, this opens the folder', timeout: 3500 }) : app.run(() => api.post(`/api/projects/${c.id}/reveal`)));
 
   ui.confirm = ({ title, text, ok = 'ok' }) =>
     new Promise((resolve) => {
@@ -224,8 +196,15 @@ export function createApps(app) {
     const commits = p.git?.commits || [];
     const recent = p.recent || [];
     const todos = p.todos?.open || [];
+    const aiOn = app.state.aiReady;
+    const recap = c.meta.ai?.where;
+    const steps = c.meta.ai?.steps?.items || [];
     return `
-      <p class="lead">you were last here <b>${ago(p.lastTouched)}</b> <span class="muted">(${fmtDate(p.lastTouched)})</span></p>
+      <p class="lead">you were last here <b>${ago(c.lastActive)}</b> <span class="muted">(${fmtDate(c.lastActive)})</span></p>
+      ${c.note ? `<div class="note-card"><b>✉ your last note</b> <span class="muted">· ${ago(c.note.t)}</span><p>${esc(c.note.text)}</p></div>` : ''}
+      ${recap ? `<div class="ai-card"><b>✨ recap</b> <span class="muted">· ${ago(recap.t)}</span><p>${esc(recap.recap)}</p><p><b>you probably stopped at:</b> ${esc(recap.stoppedAt)}</p><p class="next">10-minute step → <b>${esc(recap.nextStep)}</b><br><span class="muted">${esc(recap.why)}</span></p></div>` : ''}
+      ${aiOn ? `<div class="row" style="margin:6px 0 4px"><button class="btn small" data-act="ai-where">✨ ${recap ? 'fresh recap' : 'recap this for me'}</button><button class="btn small" data-act="ai-steps">✨ ${steps.length ? 'new steps' : 'break it into steps'}</button><button class="link" data-act="ai-preview">what gets sent?</button></div>` : ''}
+      ${steps.length ? `<h4>next steps</h4><ul class="steps">${steps.map((st, i) => `<li><label class="check"><input type="checkbox" data-step="${i}" ${st.done ? 'checked' : ''}> <span>${esc(st.text)}</span></label></li>`).join('')}</ul>` : ''}
       ${commits.length ? `<h4>your last commits</h4><ul class="crumbs">${commits.slice(0, 5).map((x) => `<li><span>${esc(x.msg)}</span><time>${ago(x.t)}</time></li>`).join('')}</ul>` : ''}
       ${recent.length ? `<h4>files you changed last</h4><ul class="crumbs">${recent.map((f) => `<li><span class="mono">${esc(f.rel)}</span><time>${ago(f.t)}</time></li>`).join('')}</ul>` : '<p class="muted">this folder is empty. maybe it was waiting for a first file?</p>'}
       ${todos.length
@@ -248,6 +227,9 @@ export function createApps(app) {
       'let-go': '🗑 let go', restored: '♻ came back from the recycle bin', revived: '💌 you came back for me',
     };
     for (const e of c.meta.events || []) items.push([e.t, `${words[e.type] || e.type}${e.cause ? ` (${esc(CAUSES[e.cause] || e.cause)})` : ''}`]);
+    for (const n of c.meta.notes || []) items.push([n.t, `✉ you left a note: <q>${esc(short(n.text, 140))}</q>`]);
+    const sessions = c.meta.sessions || [];
+    if (sessions.length) items.push([sessions[sessions.length - 1].t, `◷ ${plural(sessions.length, 'focus session')}, ${Math.round(sessions.reduce((n, x) => n + x.minutes, 0) / 6) / 10} hours in all`]);
     items.sort((a, b) => a[0] - b[0]);
     const heard = app.habitat.heard(c.key);
     return `
@@ -261,12 +243,12 @@ export function createApps(app) {
     if (c.letGo) return `<button class="btn primary" data-act="restore">♻ restore</button><span class="spacer"></span><span class="muted">let go ${ago(c.letGo.at)} · ${esc(CAUSES[c.letGo.cause])}</span>`;
     if (c.frozen) return '<button class="btn primary" data-act="thaw">☀ thaw</button>';
     return `
-      <button class="btn ${c.onDesk ? '' : 'primary'}" data-act="desk">${c.onDesk ? 'take off desk' : '★ put on desk'}</button>
+      <button class="btn primary" data-act="resume">▶ resume</button>
+      <button class="btn" data-act="desk">${c.onDesk ? 'take off desk' : '★ put on desk'}</button>
+      <button class="btn" data-act="note">✉ note</button>
       <button class="btn" data-act="ship">${c.stage === 'shipped' ? 'not shipped' : '✨ shipped it'}</button>
-      <button class="btn" data-act="look">🎲 new look</button>
       <span class="spacer"></span>
-      <button class="btn" data-act="freeze">🧊 freeze</button>
-      <button class="btn danger" data-act="letgo">let go…</button>`;
+      <button class="btn" data-act="more">more ▾</button>`;
   }
 
   async function onProjectClick(e, w, key) {
@@ -277,9 +259,31 @@ export function createApps(app) {
       w.tab = tabBtn.dataset.tab;
       return w.refresh();
     }
+    const step = e.target.closest('[data-step]');
+    if (step) return app.run(async () => app.setState(await patchProject(c, { stepDone: Number(step.dataset.step), done: step.checked })));
     const btn = e.target.closest('[data-act]');
     if (!btn) return;
     switch (btn.dataset.act) {
+      case 'resume':
+        return resume(app, c);
+      case 'note':
+        return ui.leaveNote(c, btn);
+      case 'more': {
+        const r = btn.getBoundingClientRect();
+        return ui.menuFor(c, r.left, r.bottom + 4);
+      }
+      case 'ai-where':
+        btn.disabled = true;
+        btn.textContent = '✨ thinking…';
+        await ui.aiWhere(c, btn);
+        return w.refresh();
+      case 'ai-steps':
+        btn.disabled = true;
+        btn.textContent = '✨ thinking…';
+        await ui.aiSteps(c, btn);
+        return w.refresh();
+      case 'ai-preview':
+        return ui.aiPreview('where', { projectId: c.id }, btn);
       case 'rename':
         w.renaming = true;
         return w.refresh();
@@ -291,6 +295,7 @@ export function createApps(app) {
           const shipped = c.stage !== 'shipped';
           app.setState(await patchProject(c, { shipped }));
           if (shipped) app.habitat.hop(c.key, "i'm live!! ✨");
+          undoable(shipped ? `${c.name} shipped ✨` : 'marked as not shipped', async () => app.setState(await patchProject(c, { shipped: !shipped })));
         });
       case 'look': return ui.newLook(c);
       case 'freeze': return ui.freeze(c);
@@ -371,14 +376,14 @@ export function createApps(app) {
         <p style="margin:0 0 8px">made a folder for this idea? link them and the egg hatches into that folder's creature.</p>
         ${best ? `<p class="next" style="margin:0 0 10px">this looks like it: <b>${esc(best.name)}</b> <button class="btn small primary" data-act="hatch" data-id="${best.id}">yes, hatch!</button></p>` : ''}
         ${cands.length
-          ? `<div class="row"><select class="select" name="project" style="flex:1">${cands.map(({ x }) => `<option value="${x.id}">${esc(x.name)} (${esc(x.p.folder)})</option>`).join('')}</select><button class="btn" data-act="hatch-pick">hatch</button></div>`
+          ? `<div class="row"><select class="select" name="project" style="flex:1">${cands.map(({ x }) => `<option value="${x.id}">${esc(x.name)} (${esc(x.p.folder)})</option>`).join('')}</select><button class="btn" data-act="hatch-pick">hatch</button>${app.state.aiReady ? '<button class="btn small" data-act="ai-match">✨ find its folder</button>' : ''}</div>`
           : '<p class="muted" style="margin:0">no unlinked folders yet. when you make one, it shows up here.</p>'}
       </fieldset>`}
       <div class="actions">${c.letGo
         ? '<button class="btn primary" data-act="restore">♻ restore</button>'
         : c.frozen
           ? '<button class="btn primary" data-act="thaw">☀ thaw</button>'
-          : '<button class="btn" data-act="look">🎲 new look</button><span class="spacer"></span><button class="btn" data-act="freeze">🧊 freeze</button><button class="btn danger" data-act="letgo">let go…</button>'}</div>`;
+          : `<button class="btn" data-act="pin">${i.pinned ? 'unpin from board' : '📌 pin to board'}</button>${app.state.aiReady ? '<button class="btn" data-act="ai-tidy">✨ tidy</button><button class="btn" data-act="ai-readme">✨ names + README</button>' : ''}<span class="spacer"></span><button class="btn" data-act="freeze">🧊 freeze</button><button class="btn danger" data-act="letgo">let go…</button>`}</div>`;
   }
 
   async function onEggClick(e, w, key) {
@@ -396,6 +401,27 @@ export function createApps(app) {
           document.activeElement?.blur();
           drawEgg(w, get(key));
         });
+      case 'pin': return ui.pin(c, !c.idea.pinned);
+      case 'ai-tidy':
+        btn.disabled = true;
+        btn.textContent = '✨ thinking…';
+        await ui.aiTidyEgg(c, btn);
+        w.dirty = false;
+        return w.refresh();
+      case 'ai-readme': return ui.aiReadme(c, btn);
+      case 'ai-match': {
+        btn.disabled = true;
+        btn.textContent = '✨ looking…';
+        const m = await ui.aiMatch(c, btn);
+        btn.disabled = false;
+        btn.textContent = '✨ find its folder';
+        if (m) {
+          const sel = w.body.querySelector('[name=project]');
+          if (sel) sel.value = m.projectId;
+          balloon({ title: `looks like ${get(`p:${m.projectId}`).name} (${m.confidence})`, text: m.reason, timeout: 8000 });
+        }
+        return;
+      }
       case 'hatch': return ui.hatch(c, btn.dataset.id);
       case 'hatch-pick': return ui.hatch(c, w.body.querySelector('[name=project]').value);
       case 'look': return ui.newLook(c);
@@ -412,6 +438,7 @@ export function createApps(app) {
       closeWindow(`props:${egg.key}`);
       app.habitat.hatch(egg.key, `p:${projectId}`, `it's me! i was "${short(egg.name, 26)}"`);
       app.setState(res);
+      undoable(`"${short(egg.name, 24)}" hatched`, async () => app.setState(await patchIdea(egg, { projectId: null })));
     });
 
   // ------------------------------------------------------------ desk full
@@ -463,20 +490,24 @@ export function createApps(app) {
             ${Object.entries(CAUSES).map(([v, label], n) => `<label><input type="radio" name="cause" value="${v}" ${n === 0 ? 'checked' : ''}> ${label}</label>`).join('')}
           </div></fieldset>
           <label class="field" style="margin-top:12px"><span>what's worth keeping? (a name, a feature, a lesson)</span><textarea class="textarea" name="keep" rows="3" maxlength="500"></textarea></label>
-          <div class="row end"><button class="btn" data-act="cancel">cancel</button><button class="btn primary" data-act="go">let go</button></div>`;
-        w.body.addEventListener('click', (e) => {
+          <div class="row end">${app.state.aiReady ? '<button class="btn small" data-act="ai">✨ suggest (AI)</button><span style="flex:1"></span>' : ''}<button class="btn" data-act="cancel">cancel</button><button class="btn primary" data-act="go">let go</button></div>`;
+        w.body.addEventListener('click', async (e) => {
           const act = e.target.closest('[data-act]')?.dataset.act;
           if (act === 'cancel') return w.close();
+          if (act === 'ai') {
+            const b = e.target.closest('button');
+            b.disabled = true;
+            b.textContent = '✨ thinking…';
+            await ui.aiLetGo(c, w.body, b);
+            b.disabled = false;
+            b.textContent = '✨ suggest (AI)';
+            return;
+          }
           if (act !== 'go') return;
           const cause = w.body.querySelector('[name=cause]:checked').value;
           const keep = w.body.querySelector('[name=keep]').value;
           w.close();
-          closeWindow(`props:${c.key}`);
-          closeWindow(`visit:${c.key}`);
-          app.run(async () => {
-            app.setState(await patch(c, { letGo: { cause, keep } }));
-            balloon({ title: `${c.name} is in the recycle bin`, text: 'you can restore it any time.', onClick: () => ui.bin() });
-          });
+          ui.confirmLetGo(c, cause, keep);
         });
       },
     });
@@ -551,6 +582,12 @@ export function createApps(app) {
         w.refresh = () => drawTasks(w);
         drawTasks(w);
         w.body.addEventListener('click', (e) => onTaskClick(e, w));
+        w.body.addEventListener('contextmenu', (e) => {
+          const row = e.target.closest('tr[data-key]');
+          if (!row) return;
+          e.preventDefault();
+          ui.menuFor(get(row.dataset.key), e.clientX, e.clientY);
+        });
         w.body.addEventListener('dblclick', (e) => {
           const row = e.target.closest('tr[data-key]');
           if (row) ui.props(row.dataset.key, row);
@@ -745,7 +782,7 @@ export function createApps(app) {
           <div class="run-head">${icons.egg}<p>type an idea and brainchildren will keep it safe as an egg. hatch it later, when you make a folder for it.</p></div>
           <label class="field"><span>Open:</span><input class="input" name="title" maxlength="80" placeholder="e.g. a playlist that matches your outfit" autocomplete="off"></label>
           <label class="field"><span>notes (optional)</span><textarea class="textarea" name="note" rows="4" maxlength="4000" placeholder="ramble here. who is it for? what's the magic bit?"></textarea></label>
-          ${SR ? '<div class="row"><button class="btn small mic" data-act="mic">🎤 talk</button><span class="mic-status"></span></div>' : ''}
+          <div class="row">${SR ? '<button class="btn small mic" data-act="mic">🎤 talk</button>' : ''}${app.state.aiReady ? '<button class="btn small" data-act="tidy">✨ tidy my ramble</button>' : ''}<span class="mic-status"></span></div>
           <p class="err" hidden></p>
           <div class="row end" style="margin-top:12px"><button class="btn" data-act="cancel">cancel</button><button class="btn primary" data-act="ok">OK</button></div>
           ${SR ? '<p class="small-print">talking uses your browser\'s speech-to-text, which may send audio to its maker (Google, in Chrome). typing never leaves your computer.</p>' : ''}`;
@@ -782,6 +819,23 @@ export function createApps(app) {
           const act = e.target.closest('[data-act]')?.dataset.act;
           if (act === 'cancel') return w.close();
           if (act === 'ok') return submit();
+          if (act === 'tidy') {
+            const text = `${title.value}\n${note.value}`.trim();
+            if (!text) return title.focus();
+            const b = e.target.closest('button');
+            b.disabled = true;
+            b.textContent = '✨ tidying…';
+            ui.aiTidyRamble(text, b).then((card) => {
+              b.disabled = false;
+              b.textContent = '✨ tidy my ramble';
+              if (!card) return;
+              title.value = card.title;
+              note.value = ui.cardNote(card);
+              const similar = (card.similarIds || []).map((id) => get(`e:${id}`) || get(`p:${id}`)).filter(Boolean);
+              if (similar.length) balloon({ title: 'this sounds like something you already have', text: similar.map((x) => x.name).join(', '), timeout: 8000 });
+            });
+            return;
+          }
           if (act !== 'mic') return;
           const mic = w.body.querySelector('.mic');
           const status = w.body.querySelector('.mic-status');
@@ -817,137 +871,6 @@ export function createApps(app) {
     });
 
   // ------------------------------------------------------------ settings
-
-  ui.settings = (from, { welcome = false } = {}) =>
-    openWindow({
-      key: 'settings',
-      title: welcome ? 'welcome to brainchildren' : 'Settings',
-      icon: icons.settings,
-      width: 540,
-      from,
-      render(w) {
-        const s = model().settings;
-        const roots = [...s.roots];
-        w.body.innerHTML = `
-          ${welcome ? `<p class="welcome">every folder in your projects folder becomes a little person who lives in your studio. the ones you forget about get sleepy, nap on the sofa, then turn into ghosts, so no idea gets lost. <b>nothing leaves your computer.</b></p>` : ''}
-          <label class="field"><span>what should your creatures call you?</span><input class="input" name="name" maxlength="40" value="${esc(s.name)}" placeholder="${esc(app.state.user || 'you')}"></label>
-          <div class="field"><span>where do your projects live?</span>
-            <ul class="roots"></ul>
-            <div class="row"><input class="input" name="root" placeholder="paste a folder path, like D:\\projects or ~/code" style="flex:1" autocomplete="off"><button class="btn" data-act="add">add</button></div>
-            <div class="chips"></div>
-            <p class="small-print">each folder inside becomes a creature. if the folder is a project itself (it has .git or package.json), it becomes one creature.</p>
-          </div>
-          <fieldset class="group"><legend>life cycle</legend>
-            <div class="row" style="gap:16px">
-              <label class="row" style="gap:6px">falls asleep after <input class="input" type="number" name="sleepDays" min="3" max="120" value="${s.sleepDays}" style="width:70px"> days</label>
-              <label class="row" style="gap:6px">turns into a ghost after <input class="input" type="number" name="ghostDays" min="4" max="365" value="${s.ghostDays}" style="width:70px"> days</label>
-            </div>
-          </fieldset>
-          <fieldset class="group"><legend>preferences</legend>
-            <div class="row" style="gap:16px">
-              <label class="row" style="gap:6px">open projects in <select class="select" name="editor" style="width:auto">${Object.entries(EDITORS).map(([k, [label]]) => `<option value="${k}" ${s.editor === k ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
-              <label class="row" style="gap:6px">characters <select class="select" name="look" style="width:auto"><option value="pixel" ${s.look !== 'doodle' ? 'selected' : ''}>pixel people</option><option value="doodle" ${s.look === 'doodle' ? 'selected' : ''}>doodle creatures</option></select></label>
-              <label class="row" style="gap:6px">chatter <select class="select" name="chatter" style="width:auto">${['lots', 'some', 'quiet'].map((k) => `<option ${s.chatter === k ? 'selected' : ''}>${k}</option>`).join('')}</select></label>
-            </div>
-          </fieldset>
-          ${welcome ? '' : `
-          <fieldset class="group"><legend>time machine</legend>
-            <p class="small-print" style="margin:0 0 8px">peek at your desktop in the future to see who'll be a ghost if nothing changes. it's only a preview and resets when you reload.</p>
-            <div class="range-row"><input type="range" name="time" min="0" max="90" value="${clock.offsetDays}"><b class="time-label"></b></div>
-          </fieldset>`}
-          <p class="err" hidden></p>
-          <div class="row end" style="margin-top:14px">${welcome ? '' : '<button class="btn" data-act="cancel">cancel</button>'}<button class="btn primary" data-act="save">${welcome ? 'meet my creatures' : 'save'}</button></div>`;
-
-        const list = w.body.querySelector('.roots');
-        const input = w.body.querySelector('[name=root]');
-        const err = w.body.querySelector('.err');
-        const chips = w.body.querySelector('.chips');
-        const drawRoots = () => {
-          list.innerHTML = roots.length
-            ? roots.map((r, n) => `<li><code>${esc(r)}</code><button class="btn small" data-remove="${n}">remove</button></li>`).join('')
-            : '<li class="muted">no folders yet. add one below.</li>';
-        };
-        const addRoot = (p) => {
-          const v = String(p || '').trim();
-          if (v && !roots.some((r) => r.toLowerCase() === v.toLowerCase())) roots.push(v);
-          input.value = '';
-          drawRoots();
-          drawChips();
-        };
-        let suggestions = [];
-        const drawChips = () => {
-          const left = suggestions.filter((sug) => !roots.some((r) => r.toLowerCase() === sug.path.toLowerCase()));
-          chips.innerHTML = left.length
-            ? `<span class="small-print" style="margin:0">found:</span>${left.map((sug) => `<button class="btn small" data-suggest="${esc(sug.path)}">+ ${esc(sug.path)} · ${plural(sug.count, 'folder')}</button>`).join('')}`
-            : '';
-        };
-        const timeLabel = () => {
-          const el = w.body.querySelector('.time-label');
-          if (el) el.textContent = clock.offsetDays ? `+${plural(clock.offsetDays, 'day')} (${fmtDate(clock.now())})` : 'today';
-        };
-        drawRoots();
-        timeLabel();
-        api.get('/api/suggest-roots').then((list) => {
-          suggestions = list;
-          drawChips();
-        }, () => {});
-
-        input.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter') addRoot(input.value);
-        });
-        w.body.addEventListener('input', (e) => {
-          if (e.target.name === 'time') {
-            clock.offsetDays = e.target.value;
-            timeLabel();
-            app.remodel();
-          }
-        });
-        w.body.addEventListener('click', async (e) => {
-          const t = e.target.closest('button');
-          if (!t) return;
-          if (t.dataset.suggest) return addRoot(t.dataset.suggest);
-          if (t.dataset.remove) {
-            roots.splice(Number(t.dataset.remove), 1);
-            drawRoots();
-            return drawChips();
-          }
-          if (t.dataset.act === 'add') return addRoot(input.value);
-          if (t.dataset.act === 'cancel') return w.close();
-          if (t.dataset.act !== 'save') return;
-          if (input.value.trim()) addRoot(input.value);
-          const val = (n) => w.body.querySelector(`[name=${n}]`).value;
-          t.disabled = true;
-          t.textContent = 'looking at your folders…';
-          err.hidden = true;
-          try {
-            const next = await api.post('/api/settings', {
-              name: val('name'),
-              roots,
-              sleepDays: Number(val('sleepDays')),
-              ghostDays: Number(val('ghostDays')),
-              editor: val('editor'),
-              chatter: val('chatter'),
-              look: val('look'),
-            });
-            w.close();
-            app.setState(next);
-            if (welcome) app.afterSetup?.();
-            const n = next.projects.length;
-            balloon({
-              title: welcome ? `say hi to your ${plural(n, 'project')}!` : 'settings saved',
-              text: welcome ? 'a quick tour is starting.' : `watching ${plural(n, 'folder')}.`,
-              timeout: 4000,
-            });
-          } catch (ex) {
-            err.hidden = false;
-            err.textContent = ex.message;
-            t.disabled = false;
-            t.textContent = welcome ? 'meet my creatures' : 'save';
-          }
-        });
-        if (welcome && !roots.length) setTimeout(() => input.focus(), 80);
-      },
-    });
 
   // ------------------------------------------------------------ about
 

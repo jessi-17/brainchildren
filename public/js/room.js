@@ -81,6 +81,29 @@ const C = {
   boardLine: '#ebe8fb',
 };
 
+// wallpaper palettes, each with its own matching wainscot ('lilac' = the
+// original room)
+const wallPal = (ceil, ceilHi, ceilLo, wall, wallShade, wallDot, wallDot2, railHi, rail, railLo, wains, wainsLo, wainsHi, baseHi, base, baseLo) => ({
+  ceil, ceilHi, ceilLo, wall, wallShade, wallDot, wallDot2, railHi, rail, railLo, wains, wainsLo, wainsHi, baseHi, base, baseLo,
+});
+const WALLS = {
+  lilac: wallPal(C.ceil, C.ceilHi, C.ceilLo, C.wall, C.wallShade, C.wallDot, C.wallDot2, C.railHi, C.rail, C.railLo, C.wains, C.wainsLo, C.wainsHi, C.baseHi, C.base, C.baseLo),
+  mint: wallPal('#a9dcc6', '#e6fbf1', '#86c3a9', '#c8f0de', '#bbe8d3', '#dcf9ec', '#b4e3cd', '#ffffff', '#f1ecff', '#a99ad8', '#d7caff', '#c4b4f2', '#e5dcff', '#ffffff', '#efe9ff', '#a796d6'),
+  peach: wallPal('#f5c1a6', '#fff0e6', '#d9a084', '#ffdcc8', '#f9cfb9', '#ffe9dc', '#f5c8b0', '#ffffff', '#eaf5ff', '#8fb3d8', '#c2e0fb', '#a9cff3', '#d6ebff', '#ffffff', '#e4f1ff', '#8daed2'),
+  sky: wallPal('#add0f0', '#ebf6ff', '#88b0d8', '#cfe6ff', '#c2dcf7', '#e2f1ff', '#bad6f3', '#fffdf2', '#fff6d8', '#d4b06a', '#ffe7a8', '#f2d088', '#fff1c8', '#fffdf2', '#fff3cf', '#ccab62'),
+  butter: wallPal('#f0da96', '#fffbe8', '#d3b96e', '#fff0bf', '#f9e6ae', '#fff8dc', '#f3e0a2', '#ffffff', '#ecfbf3', '#7cbc9f', '#bcebd5', '#a2dbc1', '#d1f5e4', '#ffffff', '#e5f8ee', '#79b699'),
+  cocoa: wallPal('#c39e8b', '#f2dfd3', '#a47e6c', '#dcbcaa', '#d2b09d', '#e8cfc0', '#cca693', '#fffaf4', '#fff1e4', '#b48e79', '#f2dfcc', '#e3c7af', '#faeddf', '#fffaf4', '#f6e6d6', '#ae8671'),
+};
+// floors: the planks/tiles/mats plus the matching contact shadow
+const FLOORS = {
+  wood: { kind: 'wood', shadow: C.shadow, shadow2: C.shadow2 },
+  checker: { kind: 'checker', a: '#fff1f6', b: '#f8d3e4', hi: '#ffffff', seam: '#ebbcd2', shadow: '#d8a5bd', shadow2: '#e6bccf' },
+  carpet: { kind: 'carpet', f: '#c8d6fa', hi: '#dbe5ff', lo: '#b5c5ef', seam: '#a9bae6', shadow: '#9cadd9', shadow2: '#b0bfe8' },
+  tatami: { kind: 'tatami', f: '#e1e6ad', hi: '#eef1c9', lo: '#d4d99c', edge: '#aaa5e4', shadow: '#b7bd7e', shadow2: '#cacf93' },
+};
+let WP = WALLS.lilac; // the palettes in use while baking
+let FP = FLOORS.wood;
+
 // tiny 3x5 pixel font
 const FONT = {
   A: '010101111101101', B: '110101110101110', C: '011100100100011', D: '110101101101110',
@@ -117,12 +140,17 @@ const BULB = [
   '...kkk...',
 ];
 const HOURGLASS = ['kkkkkkk', '.kyyyk.', '.kgyyk.', '..kyk..', '...k...', '..kgk..', '.kgygk.', '.kyyyk.', 'kkkkkkk'];
+const TROPHY = ['kkkkk', 'khyyk', 'kyyok', '.kok.', '..k..', '.kyk.', '.kkk.'];
+const STAR5 = ['..k..', '.kyk.', 'kyyyk', '.kyk.', '.k.k.'];
 const MUG = ['kkkk..', 'khpkk.', 'kppk.k', 'kppkk.', '.kk...'];
 const FISH = ['.ppp.p', 'pkpppp', '.ppp.p'];
 
 // ------------------------------------------------------------------ layout
 
-function plan(W, lv) {
+const CHAIR_AW = 5; // your armchair: two arms around a 22px cushion
+const CHAIR_W = CHAIR_AW * 2 + 22;
+
+function plan(W, lv, chair = true) {
   const narrow = lv === 0;
   const dw = narrow ? 36 : lv < 4 ? 40 : lv < 6 ? 44 : lv < 9 ? 46 : 48;
   const ss = lv < 5 ? 20 : 21; // sofa seat pitch: three 20px sitters fit between the arms
@@ -135,6 +163,7 @@ function plan(W, lv) {
   add('fridge', narrow ? 20 : 22, lv >= 4 ? 0.5 : 1);
   add('bin', narrow ? 9 : 10, 0.4);
   add('cabinet', narrow ? 38 : 20, 0.4);
+  if (chair) add('chair', CHAIR_W, 0.7);
   add('desk0', dw, 1.2);
   add('desk1', dw, 0.5);
   add('desk2', dw, 0.5);
@@ -152,13 +181,41 @@ function plan(W, lv) {
 }
 
 function pickPlan(W) {
-  if (W < 380) return plan(W, 0);
+  if (W < 380) {
+    // the tiniest rooms can't fit the armchair against the wall: it stands
+    // on the floor in front of the door instead
+    const p = plan(W, 0);
+    return p.slack >= 2 ? p : plan(W, 0, false);
+  }
   // the richest set of furniture that still leaves comfortable gaps
   for (let lv = 9; lv > 1; lv--) {
     const p = plan(W, lv);
     if (p.slack / p.wsum >= (lv >= 9 ? 12 : lv >= 8 ? 10 : 6.5)) return p;
   }
   return plan(W, 1);
+}
+
+// a summed-area table of where the rects (grown by m) cover the wall, so
+// any 'is this rect clear?' question is answered in constant time
+function occupancy(W, H, rects, m) {
+  const grid = new Uint8Array(W * H);
+  for (const r of rects) {
+    const x0 = Math.max(0, r.x - m);
+    const x1 = Math.min(W, r.x + r.w + m);
+    for (let y = Math.max(0, r.y - m), y1 = Math.min(H, r.y + r.h + m); y < y1; y++) if (x1 > x0) grid.fill(1, y * W + x0, y * W + x1);
+  }
+  const W1 = W + 1;
+  const sat = new Int32Array(W1 * (H + 1));
+  for (let y = 0; y < H; y++) {
+    let row = 0;
+    for (let x = 0; x < W; x++) {
+      row += grid[y * W + x];
+      sat[(y + 1) * W1 + x + 1] = sat[y * W1 + x + 1] + row;
+    }
+  }
+  return (r) =>
+    r.x >= 0 && r.y >= 0 && r.x + r.w <= W && r.y + r.h <= H &&
+    sat[(r.y + r.h) * W1 + r.x + r.w] - sat[r.y * W1 + r.x + r.w] - sat[(r.y + r.h) * W1 + r.x] + sat[r.y * W1 + r.x] === 0;
 }
 
 const overlaps = (a, b, m = 0) =>
@@ -170,6 +227,7 @@ export function layoutRoom(W, H) {
   const floorY = clamp(Math.round(100 + (H - 170) * 0.4), 84, H - 52);
   const base = floorY + 9; // front edge of the furniture standing on the floor
   const sy = base - 3; // feet of anyone sitting at a desk or on the sofa
+  const railY = floorY - 21; // top of the wainscot
   const p = pickPlan(W);
   const { lv, narrow, dw, ss, aw } = p;
 
@@ -182,16 +240,24 @@ export function layoutRoom(W, H) {
     sum += it.w;
   });
 
-  const parts = { lv, narrow, base, sy, floorY };
+  const parts = { lv, narrow, base, sy, floorY, railY };
   const taken = []; // wall rectangles already used
+  const furn = []; // what stands in front of the wall
+  const box = (x, y, w, h) => furn.push({ x, y, w, h });
 
-  // door (set into the back wall) with the clock above it
-  const dh = Math.min(58, floorY - CEIL - 26);
+  // door (set into the back wall), the studio's name sign over it and the
+  // clock above that
+  const dh = Math.min(58, floorY - CEIL - 42);
   const door = { x: pos.door.x, y: floorY - dh, w: pos.door.w, h: dh };
   parts.door = door;
-  const clock = { cx: door.x + (door.w >> 1), cy: Math.max(CEIL + 12, door.y - 13) };
+  const dcx = door.x + (door.w >> 1);
+  const sgw = W >= 420 ? 46 : narrow ? 36 : 40;
+  const sign = { x: clamp(dcx - (sgw >> 1), 2, W - 2 - sgw), y: door.y - 14, w: sgw, h: 11 };
+  parts.sign = sign;
+  const clock = { cx: dcx, cy: Math.max(CEIL + 11, sign.y - 10) };
   parts.clock = clock;
-  taken.push({ x: door.x - 2, y: door.y, w: door.w + 4, h: dh }, { x: clock.cx - 7, y: clock.cy - 7, w: 15, h: 15 });
+  const clockR = { x: clock.cx - 7, y: clock.cy - 8, w: 15, h: 16 };
+  taken.push({ x: door.x - 2, y: door.y, w: door.w + 4, h: dh }, clockR, { x: sign.x - 1, y: sign.y - 1, w: sign.w + 2, h: sign.h + 2 });
 
   const fridge = { x: pos.fridge.x, w: pos.fridge.w, h: narrow ? 42 : 46 };
   fridge.top = base - fridge.h;
@@ -203,6 +269,9 @@ export function layoutRoom(W, H) {
   cab.top = base - cab.h;
   parts.cabinet = cab;
   if (lv >= 2) parts.printer = { x: cab.x + 1, y: cab.top - 6, w: cab.w - 2 };
+  box(fridge.x, fridge.top - 1, fridge.w, fridge.h + 1);
+  box(bin.x - 1, bin.top - 6, bin.w + 2, bin.h + 6);
+  box(cab.x, parts.printer ? cab.top - 10 : cab.top, cab.w, base - cab.top + 10);
 
   // the incubator: on its own little table, or on the low cabinet when narrow
   let nest;
@@ -219,15 +288,27 @@ export function layoutRoom(W, H) {
     ...[3, -9, 15].map((o) => ({ x: nest.cx + o, y: nest.ty + 9 })),
   ];
   parts.nest = nest;
+  // the heat lamp (dome, arm and pole) and the bowl below it
+  box(nest.cx - 8, nest.lampTop - 1, nest.poleX + 2 - (nest.cx - 8), base - nest.lampTop + 1);
+  box(nest.cx - 24, nest.ty - 2, 48, base - nest.ty + 2);
+  const nestR = { x: nest.cx - 23, y: nest.lampTop, w: 46, h: (narrow ? cab.top + 2 : base) - nest.lampTop };
+  furn.push(nestR);
 
+  const y0 = sy - 17; // desk tops
   parts.desks = [0, 1, 2].map((i) => {
     const { x } = pos['desk' + i];
+    const mon = { x: x + (narrow ? 1 : 2), w: narrow ? 12 : 14 };
+    // the desk, its monitor, and a cat (any pose) napping on top of it
+    box(x, y0 - 16, dw, base - (y0 - 16));
+    box(mon.x + (mon.w >> 1) - 8, y0 - 26, 16, 12);
     return {
       i,
       x,
       w: dw,
       sx: x + (narrow ? 24 : 28),
-      mon: { x: x + (narrow ? 1 : 2), w: narrow ? 12 : 14 },
+      mon,
+      screen: { x: mon.x + 3, y: y0 - 12, w: mon.w - 5, h: 7 },
+      cat: { x: mon.x + (mon.w >> 1), y: y0 - 14 },
       acc: dw >= 44 ? ['mug', 'lamp', 'plant'][i] : null,
     };
   });
@@ -236,6 +317,16 @@ export function layoutRoom(W, H) {
   const sofa = { x: so.x, w: so.w, aw, ss };
   sofa.seats = [0, 1, 2].map((k) => ({ x: so.x + aw + 1 + (ss >> 1) + ss * k, y: sy }));
   parts.sofa = sofa;
+  box(sofa.x, sy - 34, sofa.w, base - sy + 34);
+
+  // your spot: an armchair between the cabinet and the desks, or (in the
+  // tiniest rooms) out on the floor in front of the door
+  const chair = pos.chair
+    ? { x: pos.chair.x, w: CHAIR_W, y: sy, floor: false }
+    : { x: clamp(dcx - (CHAIR_W >> 1), 2, W - 2 - CHAIR_W), w: CHAIR_W, y: base + 6, floor: true };
+  chair.cx = chair.x + CHAIR_AW + 11;
+  parts.chair = chair;
+  box(chair.x, chair.y - 34, chair.w, 37);
 
   // rug in front of the sofa, with nap spots on it
   const rw = so.w + (narrow ? 16 : 24);
@@ -257,7 +348,10 @@ export function layoutRoom(W, H) {
     parts.bookshelf = { x: pos.bookshelf.x, w: 30, top: base - bh };
     taken.push({ x: pos.bookshelf.x - 2, y: base - bh - 10, w: 36, h: bh + 10 });
   }
-  if (pos.aquarium) parts.aquarium = { x: pos.aquarium.x, w: 30, top: base - 31 };
+  if (pos.aquarium) {
+    parts.aquarium = { x: pos.aquarium.x, w: 30, top: base - 31 };
+    box(pos.aquarium.x, base - 32, 30, 32);
+  }
   if (pos.lamp) {
     parts.lamp = { x: pos.lamp.x, w: 10, top: base - 52 };
     taken.push({ x: pos.lamp.x - 2, y: base - 52, w: 14, h: 52 });
@@ -266,15 +360,19 @@ export function layoutRoom(W, H) {
     parts.coat = { x: pos.coat.x, w: 12, top: base - 57 };
     taken.push({ x: pos.coat.x - 3, y: base - 57, w: 18, h: 57 });
   }
-  if (pos.sideTable) parts.sideTable = { x: pos.sideTable.x, w: 18 };
+  if (pos.sideTable) {
+    parts.sideTable = { x: pos.sideTable.x, w: 18 };
+    box(pos.sideTable.x, base - 26, 18, 26);
+  }
   parts.plants = [];
   if (pos.plantA) parts.plants.push({ kind: 'monstera', x: pos.plantA.x, w: 12 });
   if (pos.plantB) parts.plants.push({ kind: 'snake', x: pos.plantB.x, w: 10 });
   if (pos.plantC) parts.plants.push({ kind: 'fern', x: pos.plantC.x, w: 14 });
+  for (const pl of parts.plants) box(pl.x - 2, base - 38, pl.w + 4, 38);
 
   // window above the sofa (a little grander in wide rooms)
   const scx = so.x + so.w / 2;
-  let ww = clamp(so.w + 4 + Math.max(0, Math.round((W - 540) * 0.14)), 52, 104);
+  let ww = narrow ? so.w - 12 : clamp(so.w + 4 + Math.max(0, Math.round((W - 540) * 0.14)), 52, 104);
   ww = Math.min(ww, 2 * Math.floor(W - 10 - scx), 2 * Math.floor(scx - 10));
   ww -= ww % 2;
   const wBottom = sy - 40;
@@ -303,32 +401,117 @@ export function layoutRoom(W, H) {
     ];
   }
   parts.window = win;
-  taken.push({ x: win.x - 9, y: win.y - 6, w: ww + 18, h: wh + 12 });
+  taken.push({ x: win.x - 10, y: win.y - 6, w: ww + 20, h: wh + 12 });
 
-  // whiteboard above the desks
+  // whiteboard above the desks, high enough for a cat to nap on a monitor
   const gx0 = parts.desks[0].x;
   const gx1 = parts.desks[2].x + dw;
   const bw = clamp(Math.round((gx1 - gx0) * 0.62), 64, 128);
-  const bBottom = sy - 35;
+  const bBottom = sy - 40;
   const bh = clamp(bBottom - (CEIL + 12), 30, W >= 600 ? 56 : 52);
   const board = { x: Math.round((gx0 + gx1) / 2 - bw / 2), y: bBottom - bh, w: bw, h: bh };
+  {
+    // left: a clean patch for the user's own words over the little chart;
+    // right: a column of pinned notes
+    const ix = board.x + 4;
+    const iy = board.y + 4;
+    const iw = bw - 8;
+    const ih = bh - 8;
+    const lw = Math.round(iw * 0.6);
+    const th = clamp(Math.round(ih * 0.42), 12, 22);
+    board.text = { x: ix + 2, y: iy + 2, w: lw - 4, h: th };
+    board.chart = { x: ix + 3, top: iy + th + 6, base: iy + ih - 3, w: lw - 3 };
+    const nx = ix + lw + 1;
+    const room = ix + iw - nx;
+    const pins = [];
+    if (room >= 32) {
+      const gx = nx + ((room - 31) >> 1);
+      const ry = iy + clamp(ih - 15, 14, 19);
+      pins.push({ x: gx, y: iy + 1 }, { x: gx + 17, y: iy + 3 }, { x: gx + 1, y: ry }, { x: gx + 16, y: ry + 2 });
+    } else {
+      const gx = nx + Math.max(0, (room - 14) >> 1);
+      const step = Math.min(15, Math.floor((ih - 13) / 2));
+      for (let k = 0; k < 3; k++) pins.push({ x: gx + (k === 1 && gx + 15 <= ix + iw ? 1 : 0), y: iy + 1 + k * step });
+    }
+    board.pins = pins;
+  }
   parts.board = board;
   taken.push({ x: board.x, y: board.y, w: bw, h: bh + 2 });
 
   const fitsWall = (r) =>
     r.y - 4 >= CEIL + 4 && r.x >= 2 && r.x + r.w <= W - 2 && !taken.some((o) => overlaps(r, o, 3));
+  const isFree = (r, m, top = CEIL + 8) =>
+    r.x >= 2 && r.x + r.w <= W - 2 && r.y >= top && r.y + r.h <= railY && !taken.some((o) => overlaps(r, o, m)) && !furn.some((o) => overlaps(r, o, m));
 
   // a little floating bookshelf when there's no room for a standing one
   if (!parts.bookshelf) {
-    const x0 = fridge.x - 2;
-    const sw = Math.min(34, bin.x + bin.w + 2 - x0);
+    const binR = bin.x + bin.w + 2;
+    let x0 = fridge.x - 2;
+    const nestL = narrow ? nest.cx - 24 : W; // the incubator's lamp sits beside it on narrow walls
+    let sw = Math.min(34, binR - x0, nestL - x0);
     const bottom = fridge.top - 7;
-    const sh = bottom - 25 >= CEIL + 8 ? 25 : 13;
+    let sh = bottom - 25 >= CEIL + 8 ? 25 : 13;
+    const clash = () => overlaps({ x: x0, y: bottom - sh, w: sw, h: sh }, sign, 3) || overlaps({ x: x0, y: bottom - sh, w: sw, h: sh }, clockR, 3);
+    if (clash()) sh = 13;
+    if (clash()) {
+      x0 = sign.x + sign.w + 4;
+      sw = Math.min(34, Math.max(binR, x0 + 24) - x0, nestL - x0);
+    }
     parts.shelf = { x: x0, y: bottom - sh, w: sw, h: sh, tiers: sh > 13 ? 2 : 1 };
     taken.push(parts.shelf);
   }
 
-  // wall calendar: over the cabinet if it fits, else beside the whiteboard
+  // the shelf of things you've earned: a cubby (trophies over "lessons"
+  // books) with the record player on top, hung over your armchair when it
+  // fits there, else on the nearest free bit of wall
+  {
+    const UH = 26;
+    const TOP = 14; // the record player and its note
+    let best = null;
+    if (!chair.floor) {
+      search: for (const uw of [36, 34, 32]) {
+        for (let dy = 0; dy <= 26; dy += 2) {
+          for (const dx of [0, -2, 2, -4, 4, -6, 6, -8, 8, -10, 10]) {
+            const r = { x: Math.round(chair.cx + dx - uw / 2), y: chair.y - 37 - dy - UH - TOP, w: uw, h: UH + TOP };
+            if (isFree(r, 3)) {
+              best = r;
+              break search;
+            }
+          }
+        }
+      }
+    }
+    for (const m of [3, 2]) {
+      if (best) break;
+      const yMin = m === 3 ? CEIL + 9 : CEIL + 6;
+      const clear = occupancy(W, railY + 1, [...taken, ...furn], m);
+      let bs = Infinity;
+      for (const uw of [36, 34, 32, 30]) {
+        const r = { x: 0, y: 0, w: uw, h: UH + TOP };
+        for (let y = yMin; y + UH + TOP <= railY - 2; y++) {
+          for (let x = 2; x + uw <= W - 2; x++) {
+            const score = Math.abs(x + uw / 2 - chair.cx) + Math.abs(y + UH + TOP - (railY - 8)) * 0.6 + (36 - uw) * 3;
+            if (score >= bs) continue;
+            r.x = x;
+            r.y = y;
+            if (clear(r)) {
+              bs = score;
+              best = { ...r };
+            }
+          }
+        }
+      }
+    }
+    if (!best) best = { x: clamp(chair.cx - 15, 2, W - 32), y: CEIL + 9, w: 30, h: UH + TOP };
+    const e = { x: best.x, y: best.y + TOP, w: best.w, h: UH };
+    e.rec = { x: e.x + 2, y: e.y - 7, w: 15, h: 7 };
+    parts.earned = e;
+    taken.push(best);
+  }
+
+  // wall calendar: over the cabinet or the little shelf if it fits, else
+  // beside the whiteboard (narrow rooms try the shelf first, which keeps the
+  // wall over the incubator free)
   const calW = 19;
   const calH = 24;
   const cabTopAll = narrow ? nest.lampTop : parts.printer ? cab.top - 9 : cab.top;
@@ -337,14 +520,20 @@ export function layoutRoom(W, H) {
     { x: board.x - 7 - calW, y: board.y + 4, w: calW, h: calH },
     { x: board.x + board.w + 7, y: board.y + 4, w: calW, h: calH },
   ];
-  parts.calendar = cands.find(fitsWall) || cands[1];
-  taken.push(parts.calendar);
+  if (parts.shelf) {
+    const sh = parts.shelf;
+    const clear = sign.x + sign.w + 5; // keep clear of the name sign
+    const over = [sh.x + ((sh.w - calW) >> 1), sh.x + sh.w - calW - 1, sh.x + sh.w + 2].map((x) => ({ x: Math.max(x, clear), y: sh.y - 4 - calH, w: calW, h: calH }));
+    cands.splice(narrow ? 0 : 1, 0, ...over);
+  }
+  parts.calendar = cands.find((r) => fitsWall({ x: r.x, y: r.y - 5, w: r.w + 3, h: r.h + 5 }) && isFree(r, 2)) || cands[cands.length - 2];
+  taken.push({ x: parts.calendar.x, y: parts.calendar.y - 5, w: calW + 3, h: calH + 5 });
 
   // posters, only where they fit
   parts.posters = [];
   const poster = (kind, w, h, cx, bottom) => {
     const r = { kind, x: Math.round(cx - w / 2), y: bottom - h, w, h };
-    if (fitsWall(r)) {
+    if (fitsWall(r) && isFree(r, 2)) {
       parts.posters.push(r);
       taken.push(r);
     }
@@ -357,7 +546,7 @@ export function layoutRoom(W, H) {
   // of wall (between the whiteboard and the window, then past the window)
   if (lv >= 5) {
     const gapL = board.x + board.w + 8;
-    const gapR = win.x - 9 - 8;
+    const gapR = win.x - 10 - 8;
     if (gapR - gapL >= 46) {
       const gw = Math.min(76, gapR - gapL);
       const r = { kind: 'garland', x: Math.round((gapL + gapR) / 2 - gw / 2), y: board.y + 2, w: gw, h: 15 };
@@ -366,10 +555,10 @@ export function layoutRoom(W, H) {
         taken.push(r);
       }
     }
-    const tries = [win.x + win.w + 9 + 12, gapL + 10, win.x - 9 - 12];
+    const tries = [win.x + win.w + 10 + 12, gapL + 10, win.x - 10 - 12];
     for (const hx of tries) {
       const r = { kind: 'hanging', x: hx - 7, y: CEIL + 9, w: 15, h: 40 };
-      if (fitsWall(r)) {
+      if (fitsWall(r) && isFree(r, 2)) {
         parts.posters.push(r);
         taken.push(r);
         break;
@@ -400,13 +589,13 @@ export function layoutRoom(W, H) {
   hs('calendar', cal.x, cal.y - 5, cal.w + 3, cal.h + 5);
   if (narrow) {
     hs('cabinet', cab.x, cab.top + 2, cab.w, base - cab.top - 2);
-    hs('nest', nest.cx - 23, nest.lampTop, 46, cab.top + 2 - nest.lampTop);
   } else {
     const ct = parts.printer ? parts.printer.y - 3 : cab.top;
     hs('cabinet', cab.x, ct, cab.w, base - ct);
-    hs('nest', nest.cx - 23, nest.lampTop, 46, base - nest.lampTop);
   }
-  hs('door', door.x, door.y, door.w, door.h + 4);
+  hs('nest', nestR.x, nestR.y, nestR.w, nestR.h);
+  const chairTop = chair.y - 33;
+  hs('door', door.x, door.y, door.w, chair.floor ? chairTop - 1 - door.y : door.h + 4);
   for (const d of parts.desks) hs('desk' + d.i, d.x, sy - 33, d.w, base - (sy - 33));
   hs('sofa', sofa.x, sy - 33, sofa.w, base - (sy - 33));
   hs('window', win.x - 8, win.y - 5, win.w + 16, win.h + 9);
@@ -418,17 +607,147 @@ export function layoutRoom(W, H) {
     const s = parts.shelf;
     hs('shelf', s.x, s.y, s.w, s.h + 3);
   }
+  {
+    // your armchair, kept clear of its neighbours' hotspots
+    let cl = chair.x;
+    let cr = chair.x + chair.w;
+    const ch = { x: cl, y: chairTop, w: chair.w, h: 36 };
+    for (const o of hotspots) {
+      if (o.id === 'window' || !overlaps(ch, o)) continue;
+      if (o.x + o.w / 2 < chair.cx) cl = Math.max(cl, o.x + o.w);
+      else cr = Math.min(cr, o.x);
+    }
+    hs('chair', cl, chairTop, cr - cl, Math.min(36, H - chairTop));
+  }
+  hs('sign', sign.x, sign.y, sign.w, sign.h);
+  const e = parts.earned;
+  hs('trophies', e.x, e.y, e.w, e.h);
+  hs('record', e.rec.x - 1, e.rec.y - 3, e.rec.w + 2, e.rec.h + 3);
+
+  // free bits of wallpaper for the user's own notes and polaroids: pack in
+  // as many as fit, keep up to 8 spread around the room, then ease each one
+  // towards the middle of its patch of wall
+  let wallSpots = [];
+  {
+    const block = [...taken, ...furn, ...hotspots.filter((o) => o.id !== 'window'), ...parts.posters];
+    const top = CEIL + 12; // below the string lights
+    const clear = occupancy(W, railY - 1, block, 2);
+    const free = (r) => r.x >= 3 && r.x + r.w <= W - 3 && r.y >= top && clear(r);
+    const pack = (S, gap) => {
+      const got = [];
+      const r = { x: 0, y: 0, w: S, h: S };
+      for (let x = 3; x + S <= W - 3; x++) {
+        for (let y = top; y + S <= railY - 2; y++) {
+          r.x = x;
+          r.y = y;
+          if (free(r) && !got.some((o) => overlaps(r, o, gap))) got.push({ ...r });
+        }
+      }
+      return got;
+    };
+    let best = [];
+    for (const [S, gap] of [[18, 4], [16, 4], [16, 2]]) {
+      const got = pack(S, gap);
+      if (got.length > best.length) best = got;
+      if (best.length >= 4) break;
+    }
+    // how far a spot is from anything else on the wall (up to 8px)
+    const probe = { x: 0, y: 0, w: 0, h: 0 };
+    const clearance = (r) => {
+      let c = 0;
+      for (; c < 8; c++) {
+        probe.x = r.x - c - 1;
+        probe.y = r.y - c - 1;
+        probe.w = r.w + 2 * c + 2;
+        probe.h = r.h + 2 * c + 2;
+        if (!free(probe)) break;
+      }
+      return c;
+    };
+    if (best.length > 8) {
+      const pool = best.map((r) => ({ r, c: clearance(r) }));
+      pool.sort((a, b) => b.c - a.c);
+      const pick = [pool.shift().r];
+      while (pick.length < 8) {
+        let bi = -1;
+        let bs = -Infinity;
+        pool.forEach((p, i) => {
+          let d = Infinity;
+          for (const o of pick) d = Math.min(d, Math.hypot(p.r.x - o.x, (p.r.y - o.y) * 1.6));
+          const sc = d + p.c * 4;
+          if (sc > bs) {
+            bs = sc;
+            bi = i;
+          }
+        });
+        pick.push(pool.splice(bi, 1)[0].r);
+      }
+      best = pick;
+    }
+    // ease towards the middle of the free patch
+    for (const r of best) {
+      for (let pass = 0; pass < 2; pass++) {
+        let bc = clearance(r);
+        let bm = null;
+        const q = { x: 0, y: 0, w: r.w, h: r.h };
+        for (let dx = -6; dx <= 6; dx++) {
+          for (let dy = -6; dy <= 6; dy++) {
+            q.x = r.x + dx;
+            q.y = r.y + dy;
+            if (!free(q) || best.some((o) => o !== r && overlaps(q, o, 3))) continue;
+            const c = clearance(q);
+            if (c > bc || (c === bc && bm && Math.abs(dx) + Math.abs(dy) < Math.abs(bm.dx) + Math.abs(bm.dy))) {
+              bc = c;
+              bm = { dx, dy };
+            }
+          }
+        }
+        if (!bm) break;
+        r.x += bm.dx;
+        r.y += bm.dy;
+      }
+    }
+    wallSpots = best.sort((a, b) => a.x - b.x || a.y - b.y);
+  }
+  parts.wallSpots = wallSpots;
+
+  // a town meeting: two loose rows on the floor, facing the whiteboard
+  const walk = { left: 6, right: W - 6, top: base + 7, bottom: H - 3 };
+  const meeting = [];
+  {
+    const mcx = board.x + (board.w >> 1);
+    const depth = walk.bottom - walk.top;
+    const r1 = walk.top + clamp(Math.round(depth * 0.1), 3, 7);
+    const r2 = r1 + clamp(Math.round(depth * 0.22), 10, 15);
+    const n1 = W < 420 ? 4 : 5;
+    const jr = rng(W * 31 + H);
+    [
+      [r1, n1],
+      [r2, n1 + 1],
+    ].forEach(([ry, n]) => {
+      for (let i = 0; i < n; i++) {
+        const x = Math.round(mcx + (i - (n - 1) / 2) * 23 + jr() * 4 - 2);
+        meeting.push({ x: clamp(x, walk.left + 10, walk.right - 10), y: ry + Math.round(jr() * 2 - 1) });
+      }
+    });
+  }
 
   return {
     W,
     H,
     floorY,
-    walk: { left: 6, right: W - 6, top: base + 7, bottom: H - 3 },
-    desks: parts.desks.map((d) => ({ seat: { x: d.sx, y: sy } })),
+    walk,
+    desks: parts.desks.map((d) => ({ seat: { x: d.sx, y: sy }, screen: { ...d.screen }, cat: { ...d.cat } })),
     sofa: { seats: sofa.seats.map((s) => ({ ...s })) },
+    chair: { x: chair.cx, y: chair.y },
     naps,
     nest: { slots: nest.slots.map((s) => ({ ...s })) },
     ghosts: { left: 14, right: W - 14, top: Math.max(CEIL + 36, floorY - 30), bottom: base + 12 },
+    sign: { ...sign },
+    boardText: { ...board.text },
+    boardPins: board.pins.map((q) => ({ ...q })),
+    wallSpots: wallSpots.map((r) => ({ ...r })),
+    meeting,
     hotspots,
     parts,
   };
@@ -443,9 +762,16 @@ let g = null; // the context being painted
 let buf = null; // { w, h, px: Uint32Array } while building a static layer
 
 const colors = new Map();
+let lastC = '';
+let lastV = null;
 function rgbaOf(c) {
+  if (c === lastC) return lastV;
   let v = colors.get(c);
-  if (v) return v;
+  if (v) {
+    lastC = c;
+    lastV = v;
+    return v;
+  }
   if (c[0] === '#') v = [parseInt(c.slice(1, 3), 16), parseInt(c.slice(3, 5), 16), parseInt(c.slice(5, 7), 16), 1];
   else {
     const n = c.match(/[\d.]+/g).map(Number);
@@ -584,8 +910,8 @@ function text(str, x, y, c, s = 1) {
 }
 const textW = (str, s = 1) => str.length * 4 * s - s;
 function shadow(x, w, y) {
-  R(x, y, w, 1, C.shadow);
-  R(x + 1, y + 1, w - 2, 1, C.shadow2);
+  R(x, y, w, 1, FP.shadow);
+  R(x + 1, y + 1, w - 2, 1, FP.shadow2);
 }
 // a leaf: a rotated ellipse with its own outline, so leaves in front read
 // clearly against the ones behind
@@ -650,38 +976,41 @@ function glow(cx, cy, r, c) {
 function paintWall(L) {
   const { W, floorY } = L;
   const railY = floorY - 21;
-  R(0, 0, W, CEIL, C.ceil);
-  R(0, CEIL - 2, W, 1, C.ceilHi);
-  R(0, CEIL - 1, W, 1, C.ceilLo);
-  R(0, CEIL, W, railY - CEIL, C.wall);
-  R(0, CEIL, W, 1, C.wallShade);
+  R(0, 0, W, CEIL, WP.ceil);
+  R(0, CEIL - 2, W, 1, WP.ceilHi);
+  R(0, CEIL - 1, W, 1, WP.ceilLo);
+  R(0, CEIL, W, railY - CEIL, WP.wall);
+  R(0, CEIL, W, 1, WP.wallShade);
   // wallpaper: tiny sparkles on a diamond lattice, with dots between
   for (let y = CEIL + 6, row = 0; y < railY - 4; y += 9, row++) {
     for (let x = (row & 1) * 9 + 4; x < W + 2; x += 18) {
-      P(x, y - 1, C.wallDot);
-      P(x - 1, y, C.wallDot);
-      P(x + 1, y, C.wallDot);
-      P(x, y + 1, C.wallDot);
-      P(x + 9, y, C.wallDot2);
+      P(x, y - 1, WP.wallDot);
+      P(x - 1, y, WP.wallDot);
+      P(x + 1, y, WP.wallDot);
+      P(x, y + 1, WP.wallDot);
+      P(x + 9, y, WP.wallDot2);
     }
   }
   // chair rail and wainscot
-  R(0, railY, W, 1, C.railHi);
-  R(0, railY + 1, W, 1, C.rail);
-  R(0, railY + 2, W, 1, C.railLo);
-  R(0, railY + 3, W, floorY - railY - 7, C.wains);
+  R(0, railY, W, 1, WP.railHi);
+  R(0, railY + 1, W, 1, WP.rail);
+  R(0, railY + 2, W, 1, WP.railLo);
+  R(0, railY + 3, W, floorY - railY - 7, WP.wains);
   for (let x = 2; x < W; x += 6) {
-    R(x, railY + 3, 1, floorY - railY - 7, C.wainsLo);
-    R(x + 1, railY + 3, 1, floorY - railY - 7, C.wainsHi);
+    R(x, railY + 3, 1, floorY - railY - 7, WP.wainsLo);
+    R(x + 1, railY + 3, 1, floorY - railY - 7, WP.wainsHi);
   }
-  R(0, railY + 3, W, 1, C.wainsLo);
+  R(0, railY + 3, W, 1, WP.wainsLo);
   // skirting board
-  R(0, floorY - 4, W, 1, C.baseHi);
-  R(0, floorY - 3, W, 2, C.base);
-  R(0, floorY - 1, W, 1, C.baseLo);
+  R(0, floorY - 4, W, 1, WP.baseHi);
+  R(0, floorY - 3, W, 2, WP.base);
+  R(0, floorY - 1, W, 1, WP.baseLo);
 }
 
 function paintFloor(L) {
+  if (FP.kind === 'checker') return paintChecker(L);
+  if (FP.kind === 'carpet') return paintCarpet(L);
+  if (FP.kind === 'tatami') return paintTatami(L);
   const { W, H, floorY } = L;
   const r = rng(1234);
   const tones = [C.woodA, C.woodB, C.woodC];
@@ -706,7 +1035,68 @@ function paintFloor(L) {
   R(0, floorY, W, 1, C.shadow);
 }
 
-function paintWindow(L) {
+// rows that get a little deeper towards the front, like the planks
+const floorRows = (L, f) => {
+  const rows = [];
+  for (let y = L.floorY, row = 0; y < L.H; row++) {
+    const h = Math.min(L.H - y, f(row));
+    rows.push({ y, h, row });
+    y += h;
+  }
+  return rows;
+};
+
+// soft pastel tiles, laid square
+function paintChecker(L) {
+  const { W, floorY } = L;
+  const F = FP;
+  const tw = 14;
+  for (const { y, h, row } of floorRows(L, (r) => 7 + Math.min(5, r))) {
+    for (let x = -5, c = 0; x < W; x += tw, c++) {
+      R(x, y, tw, h, (c + row) & 1 ? F.a : F.b);
+      if ((c + row) & 1) R(x + 1, y + 1, tw - 2, 1, F.hi);
+    }
+    R(0, y + h - 1, W, 1, F.seam);
+  }
+  R(0, floorY, W, 1, F.shadow);
+}
+
+// a fluffy carpet: one colour with a soft stipple
+function paintCarpet(L) {
+  const { W, H, floorY } = L;
+  const F = FP;
+  R(0, floorY, W, H - floorY, F.f);
+  const r = rng(4321);
+  const n = Math.round((W * (H - floorY)) / 9);
+  for (let i = 0; i < n; i++) {
+    const x = Math.floor(r() * W);
+    const y = floorY + 1 + Math.floor(r() * (H - floorY - 1));
+    P(x, y, r() < 0.55 ? F.hi : F.lo);
+    if (r() < 0.25) P(x + 1, y, F.hi);
+  }
+  R(0, floorY + 1, W, 1, F.lo);
+  R(0, floorY, W, 1, F.shadow);
+}
+
+// woven mats in staggered rows, a cloth edge along each row
+function paintTatami(L) {
+  const { W, floorY } = L;
+  const F = FP;
+  for (const { y, h, row } of floorRows(L, (r) => 9 + Math.min(5, r))) {
+    const mw = 2 * (h + 14);
+    const off = row & 1 ? -(mw >> 1) : -6;
+    for (let x = off; x < W; x += mw) {
+      R(x, y, mw, h, F.f);
+      for (let yy = y + 3; yy < y + h - 1; yy += 3) R(x + 2, yy, mw - 4, 1, F.lo);
+      R(x + 1, y + 1, mw - 2, 1, F.hi);
+      R(x + mw - 1, y + 1, 1, h - 1, F.lo);
+    }
+    R(0, y, W, 1, F.edge);
+  }
+  R(0, floorY, W, 1, F.shadow);
+}
+
+function paintWindow(L, opts) {
   const wn = L.parts.window;
   const { x, y, w, h } = wn;
   R(x, y, w, h, INK);
@@ -730,8 +1120,10 @@ function paintWindow(L) {
   R(x - 3, y + h - 1, w + 6, 4, INK);
   R(x - 2, y + h, w + 4, 1, C.frameHi);
   R(x - 2, y + h + 1, w + 4, 1, C.frame);
-  // a tiny succulent on the sill
-  if (w >= 56) {
+  // the revival plant on the sill once there's something to revive, else
+  // a tiny succulent
+  if (opts.earned) paintRevivalPlant(x + w - 13, y + h - 1, Number(opts.earned.plant) || 0);
+  else if (w >= 56) {
     const px = x + w - 13;
     const py = y + h - 5;
     leaf(px + 1, py - 2, 5, 3, -2.2, MAT.leaf);
@@ -808,24 +1200,13 @@ function paintBoard(L) {
   P(x + 13, y + h - 2, INK);
   R(x + 15, y + h - 2, 5, 1, '#78b0e2');
   P(x + 20, y + h - 2, INK);
-  // scribbles: a title squiggle and a little heart doodle
-  const ix = x + 4;
-  const iy = y + 4;
-  const iw = w - 8;
-  const ih = h - 8;
-  for (let i = 0; i < 14; i++) P(ix + 3 + i, iy + 3 + (i % 4 === 1 || i % 4 === 2 ? 1 : 0), '#78b0e2');
-  for (let i = 0; i < 8; i++) P(ix + 3 + i, iy + 6, '#c9b6ff');
-  // sticky notes on the right
-  const cwid = Math.round(iw * 0.6);
-  const nx = ix + cwid + 2;
-  const room = ix + iw - nx;
-  if (room >= 9) {
-    note(nx + Math.max(0, (room - 10) >> 1), iy + 2, MAT.butter);
-    if (ih >= 26) note(nx + Math.max(0, (room - 10) >> 1) + (room >= 14 ? 3 : 0), iy + 13, MAT.pink);
-    if (ih >= 38 && room >= 12) note(nx + Math.max(0, (room - 10) >> 1) - 1, iy + 24, MAT.mint);
-  }
-  // doodles
-  spr(HEART7, ix + iw - 9, iy + ih - 8, { k: '#ff8fbf', h: C.board, p: C.board, o: C.board });
+  // the top left stays clean for the user's own words; sticky notes sit where
+  // pinned notes go (a pinned note covers its painted one)
+  const pins = L.parts.board.pins;
+  [MAT.butter, MAT.pink, MAT.mint].forEach((M, i) => {
+    const q = pins[i];
+    if (q) note(q.x + 2, q.y + 2, M);
+  });
 }
 function note(x, y, M) {
   R(x, y, 10, 9, M.f);
@@ -844,7 +1225,7 @@ function paintCalendarPaper(L) {
   line(x + 3, y - 1, nx, y - 4, SOFT);
   line(x + w - 4, y - 1, nx, y - 4, SOFT);
   // a page peeking under the top one
-  R(x + 1, y + 1, w, h, C.wallShade);
+  R(x + 1, y + 1, w, h, WP.wallShade);
   R(x, y, w, h, INK);
   R(x + 1, y + 1, w - 2, 7, MAT.pink.f);
   R(x + 1, y + 1, w - 2, 1, MAT.pink.hi);
@@ -1503,17 +1884,312 @@ function paintSideTable(L) {
   }
   R(x + 3, base - 6, w - 6, 2, INK);
   rb(x, st, w, 4, MAT.wood, 1);
-  // a little record player
-  rb(x + 1, st - 6, w - 2, 7, MAT.butter, 1);
-  P(x + 4, st - 2, INK);
-  P(x + 6, st - 2, INK);
-  ell(x + 3, st - 8, 10, 4, INK);
-  ell(x + 4, st - 7, 8, 2, '#3a3874');
-  R(x + 7, st - 7, 2, 1, MAT.pink.f);
-  line(x + w - 3, st - 9, x + w - 5, st - 6, SOFT);
-  P(x + w - 3, st - 9, INK);
-  spr(NOTE, x + w - 7, st - 17, { k: '#e05c97' });
-  spr(NOTE, x + 2, st - 15, { k: MAT.lilac.lo });
+  // a little teapot and a cup
+  const tx = x + 3;
+  const ty = st - 1; // what stands on the table stands on this row
+  ell(tx, ty - 7, 9, 8, INK);
+  ell(tx + 1, ty - 6, 7, 6, MAT.mint.f);
+  R(tx + 2, ty - 5, 2, 1, MAT.mint.hi);
+  R(tx + 5, ty - 3, 2, 1, MAT.mint.lo);
+  R(tx + 3, ty - 9, 3, 2, INK);
+  P(tx + 4, ty - 9, MAT.pink.f);
+  line(tx - 2, ty - 5, tx, ty - 3, INK); // spout
+  P(tx + 9, ty - 5, INK); // handle
+  P(tx + 9, ty - 3, INK);
+  P(tx + 10, ty - 4, INK);
+  R(tx + 11, ty - 3, 4, 3, INK);
+  R(tx + 12, ty - 3, 2, 2, MAT.pink.f);
+  R(tx + 12, ty - 3, 2, 1, MAT.pink.hi);
+}
+
+// ------------------------------------------------------- the new corner
+
+// the blank name board over the door (the app writes the name on it)
+function paintSign(L) {
+  const { x, y, w, h } = L.parts.sign;
+  // two little nails
+  P(x + 5, y - 1, SOFT);
+  P(x + w - 6, y - 1, SOFT);
+  R(x + 1, y, w - 2, h, INK);
+  R(x, y + 1, w, h - 2, INK);
+  R(x + 1, y + 1, w - 2, h - 2, MAT.wood.f);
+  R(x + 1, y + 1, w - 2, 1, MAT.wood.hi);
+  R(x + 1, y + h - 2, w - 2, 1, MAT.wood.lo);
+  R(x + 2, y + 2, w - 4, h - 4, '#fff6e8');
+  R(x + 2, y + h - 3, w - 4, 1, MAT.cream.lo);
+  // tiny hearts at the ends of the board
+  for (const hx of [x + 1, x + w - 2]) {
+    P(hx, y + (h >> 1), '#ff8fbf');
+  }
+}
+
+// your armchair; the seat cushion, skirt and arms go on the front layer
+function paintChair(L, front) {
+  const c = L.parts.chair;
+  const { x, w, y } = c;
+  const aw = CHAIR_AW;
+  const M = MAT.peach;
+  const ix = x + aw;
+  if (!front) {
+    shadow(x + 1, w - 2, y + 3);
+    // a round, tufted back with a knitted throw over it
+    rb(ix - 1, y - 33, 24, 20, M, 2);
+    R(ix + 2, y - 31, 18, 1, M.hi);
+    for (const bx of [ix + 6, ix + 11, ix + 16]) P(bx, y - 26, M.lo);
+    const T = MAT.lilac;
+    R(ix + 14, y - 33, 7, 1, INK);
+    for (let r2 = 0; r2 < 12; r2++) {
+      const wdt = r2 < 1 ? 5 : 6;
+      R(ix + 15, y - 32 + r2, wdt, 1, ((r2 / 2) | 0) % 2 ? T.f : MAT.cream.f);
+      P(ix + 14, y - 32 + r2, INK);
+      P(ix + 15 + wdt, y - 32 + r2, INK);
+    }
+    for (let i = 0; i < 6; i += 2) P(ix + 15 + i, y - 20, T.lo);
+  }
+  // seat cushion
+  rb(ix, y - 17, 22, 9, M, 1, false);
+  R(ix + 1, y - 16, 20, 2, M.hi);
+  // skirt
+  R(ix, y - 9, 22, 10, INK);
+  R(ix + 1, y - 8, 20, 8, M.lo);
+  R(ix + 1, y - 8, 20, 1, M.f);
+  for (let sx = ix + 3; sx < ix + 20; sx += 4) P(sx, y - 3, M.f);
+  // feet
+  for (const fx of [x + 2, x + w - 5]) {
+    R(fx, y, 3, 3, INK);
+    P(fx + 1, y + 1, MAT.wood.f);
+  }
+  // arms
+  for (const ax of [x, x + w - aw - 1]) {
+    rb(ax, y - 24, aw + 1, 25, M, 2);
+    R(ax + 2, y - 22, aw - 3, 1, '#ffffff');
+    R(ax + 1, y - 19, aw - 1, 1, M.lo);
+  }
+}
+
+// the earned shelf: trophies on top, "lessons" books below, and the record
+// player standing on it
+function paintEarned(L, earned) {
+  const e = L.parts.earned;
+  const { x, y, w, h } = e;
+  const F = MAT.pink;
+  const back = '#fff7fb';
+  // cubby
+  R(x, y, w, h, INK);
+  R(x + 1, y + 1, w - 2, h - 2, F.f);
+  R(x + 1, y + 1, w - 2, 1, F.hi);
+  R(x + w - 2, y + 2, 1, h - 3, F.lo);
+  const ix = x + 3;
+  const iw = w - 6;
+  const tTop = y + 3; // trophy compartment rows tTop .. y+12
+  const mid = y + 13; // divider
+  const bTop = y + 16; // book compartment rows bTop .. y+h-4
+  const bBot = y + h - 3;
+  R(ix - 1, tTop - 1, iw + 2, mid - tTop + 1, INK);
+  R(ix, tTop, iw, mid - tTop, back);
+  R(ix, tTop, iw, 1, '#f6e3ee');
+  R(ix - 1, bTop - 1, iw + 2, bBot - bTop + 1, INK);
+  R(ix, bTop, iw, bBot - bTop, back);
+  R(ix, bTop, iw, 1, '#f6e3ee');
+  R(x + 1, mid, w - 2, 1, F.hi);
+  R(x + 1, bBot, w - 2, 1, F.hi);
+  const has = earned && typeof earned === 'object';
+  const nt = has ? clamp(Math.floor(Number(earned.trophies) || 0), 0, 6) : 0;
+  const nb = has ? clamp(Math.floor(Number(earned.books) || 0), 0, 8) : 0;
+  // trophies stand on the divider
+  const TC = [MAT.butter, MAT.white, MAT.peach, MAT.butter, MAT.mint, MAT.sky];
+  if (nt) {
+    const pitch = nt > 1 ? Math.min(7, Math.floor((iw - 5) / (nt - 1))) : 0;
+    const tw = (nt - 1) * pitch + 5;
+    let tx = ix + ((iw - tw) >> 1);
+    for (let i = 0; i < nt; i++) {
+      const M = TC[i];
+      const up = i & 1; // every other one stands on a little plinth
+      if (up) R(tx + 1, mid - 1, 3, 1, F.lo);
+      spr(TROPHY, tx, mid - 7 - up, { k: INK, h: M.hi, y: M.f, o: M.lo });
+      tx += pitch;
+    }
+  } else {
+    // empty for now: a dotted outline where the first trophy will go
+    for (let i = 0; i < 5; i += 2) P(ix + (iw >> 1) - 2 + i, mid - 1, '#efd2e2');
+  }
+  // lessons: one book per few ideas let go, each with a ribbon
+  if (nb) {
+    const sw = iw >= nb * 3 + 6 ? 3 : 2;
+    let bx = ix + 1;
+    const r = rng(nb * 13 + 5);
+    for (let i = 0; i < nb; i++) {
+      const M = SPINES[(i * 3 + 1) % SPINES.length];
+      const bh = 7 + Math.floor(r() * 2);
+      R(bx, bBot - bh, sw, bh, M.f);
+      R(bx, bBot - bh, 1, bh, M.lo);
+      R(bx, bBot - bh, sw, 1, INK);
+      P(bx + sw - 1, bBot - bh + 2, M.hi);
+      // the ribbon hangs out of the bottom of the page block
+      P(bx + (sw >> 1), bBot - 2, '#ff6fae');
+      P(bx + (sw >> 1), bBot, '#ff6fae');
+      bx += sw;
+    }
+    // and a heart bookend
+    if (bx + 8 <= ix + iw) spr(HEART7.slice(0, 5), bx + 1, bBot - 5, { k: INK, h: '#ffdcea', p: '#ff8fbf', o: '#e05c97' });
+  }
+  // the record player on top
+  const p = e.rec;
+  R(p.x + 1, p.y + 2, p.w - 2, 5, INK);
+  R(p.x, p.y + 3, p.w, 3, INK);
+  R(p.x + 1, p.y + 3, p.w - 2, 3, MAT.butter.f);
+  R(p.x + 2, p.y + 3, p.w - 4, 1, MAT.butter.hi);
+  R(p.x + 1, p.y + 5, p.w - 2, 1, MAT.butter.lo);
+  P(p.x + 3, p.y + 4, INK);
+  P(p.x + 5, p.y + 4, '#ff8fbf');
+  // platter (empty until it plays)
+  ell(p.x + 1, p.y, 10, 4, INK);
+  ell(p.x + 2, p.y + 1, 8, 2, MAT.lilac.f);
+  // tonearm
+  R(p.x + p.w - 3, p.y - 1, 2, 3, INK);
+  line(p.x + p.w - 3, p.y, p.x + p.w - 5, p.y + 2, SOFT);
+  // a record sleeve leaning on the right
+  const sx = p.x + p.w + 2;
+  if (sx + 8 <= x + w) {
+    R(sx, p.y - 1, 8, 8, INK);
+    R(sx + 1, p.y, 6, 6, MAT.sky.f);
+    R(sx + 1, p.y, 6, 1, MAT.sky.hi);
+    ell(sx + 2, p.y + 1, 4, 4, '#ffffff');
+    P(sx + 3, p.y + 2, '#ff8fbf');
+  }
+}
+
+// while music plays: a record spinning and a note drifting up
+function paintRecordLive(L, on) {
+  const p = L.parts.earned.rec;
+  if (!on) return;
+  ell(p.x + 1, p.y - 1, 10, 5, INK);
+  ell(p.x + 2, p.y, 8, 3, '#3a3874');
+  R(p.x + 4, p.y, 3, 1, '#5a57a3');
+  R(p.x + 5, p.y + 1, 2, 1, MAT.pink.f);
+  // the arm swings onto the record
+  line(p.x + p.w - 3, p.y, p.x + p.w - 6, p.y + 1, INK);
+  P(p.x + 1, p.y + 4, '#7dffc0');
+  spr(NOTE, p.x + 3, p.y - 7, { k: '#e05c97' });
+}
+
+// the revival plant on the window sill: 0 = a sprout ... 5 = lush, in flower
+function paintRevivalPlant(px, sill, stage) {
+  const M = MAT.leaf;
+  const cx = px + 3;
+  const top = sill - 4; // pot top row
+  const st = clamp(Math.floor(stage), 0, 5);
+  const stem = [2, 4, 6, 8, 11, 13][st];
+  if (st >= 1) R(cx, top - stem, 1, stem, M.lo);
+  else R(cx, top - 2, 1, 2, M.lo);
+  const lv = [
+    [[-2, 2, 4, 2, -2.6], [2, 2, 4, 2, -0.5]],
+    [[-2, 3, 5, 3, -2.6], [3, 4, 5, 3, -0.5]],
+    [[-3, 3, 6, 3, -2.7], [3, 4, 6, 3, -0.45], [0, 6, 5, 3, -1.57]],
+    [[-4, 3, 7, 3, -2.8], [4, 4, 7, 3, -0.35], [-3, 7, 6, 3, -2.3], [3, 8, 6, 3, -0.8], [0, 9, 5, 3, -1.57]],
+    [[-5, 3, 7, 4, -2.8], [5, 4, 7, 4, -0.3], [-4, 7, 7, 3, -2.4], [4, 8, 7, 3, -0.7], [-2, 11, 6, 3, -2.0], [2, 11, 6, 3, -1.1]],
+    [[-6, 3, 8, 4, -2.9], [6, 4, 8, 4, -0.25], [-5, 7, 7, 4, -2.5], [5, 8, 7, 4, -0.6], [-3, 11, 7, 3, -2.1], [3, 11, 7, 3, -1.0]],
+  ][st];
+  for (const [dx, dy, len, wid, ang] of lv) leaf(cx + dx + 0.5, top - dy, len, wid, ang, M);
+  if (st >= 4) {
+    // a bloom on its own stem, leaning out to the side
+    const bx = cx + 3;
+    const by = top - stem + (st === 4 ? 1 : -1);
+    line(cx, top - stem + 5, bx, by + 2, M.lo);
+    if (st === 4) {
+      ell(bx - 1, by - 1, 4, 5, INK);
+      R(bx, by, 2, 3, '#ff9ec7');
+      P(bx, by, '#ffd0e4');
+    } else {
+      ell(bx - 3, by - 3, 8, 7, INK);
+      ell(bx - 2, by - 2, 6, 5, '#ff9ec7');
+      R(bx - 1, by - 2, 2, 1, '#ffd0e4');
+      P(bx - 2, by, '#ffd0e4');
+      P(bx + 2, by + 1, '#f07fae');
+      R(bx, by, 2, 1, '#ffe27a');
+      P(bx + 1, by - 1, '#f07fae');
+    }
+  }
+  pot(px, sill - 4, 7, 5, MAT.peach);
+  if (st === 0) P(px + 5, sill - 2, '#ff8fbf'); // a little heart sticker on the pot
+}
+
+// --------------------------------------------------------------- seasons
+
+function seasonOf(now, dayOffset) {
+  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + Math.round(dayOffset || 0));
+  const m = d.getMonth();
+  const season = m >= 2 && m <= 4 ? 'spring' : m >= 5 && m <= 7 ? 'summer' : m >= 8 && m <= 10 ? 'autumn' : 'winter';
+  return { season, month: m, key: m === 9 ? 'oct' : m === 11 ? 'dec' : season };
+}
+
+function pumpkin(x, bottom, big) {
+  const w = big ? 9 : 7;
+  const h = big ? 6 : 5;
+  const y = bottom - h;
+  ell(x, y, w, h, INK);
+  ell(x + 1, y + 1, w - 2, h - 2, '#ffb36b');
+  R(x + 2, y + 1, 1, h - 2, '#f39a4c');
+  R(x + w - 3, y + 1, 1, h - 2, '#f39a4c');
+  P(x + 2, y + 1, '#ffd2a3');
+  R(x + (w >> 1), y - 2, 1, 2, INK);
+  P(x + (w >> 1) + 1, y - 2, MAT.leaf.f);
+  P(x + (w >> 1) + 2, y - 3, MAT.leaf.f);
+}
+
+// little indoor touches that change with the month
+function paintSeasonStatic(L, sk) {
+  const wn = L.parts.window;
+  const sill = wn.y + wn.h - 1;
+  const sx = wn.x + 4;
+  const door = L.parts.door;
+  const ds = { x: door.x + 3, y: door.y + 3, w: door.w - 6, h: door.h - 3 };
+  const panel = { x: ds.x + 3, y: ds.y + 19, w: ds.w - 6, h: ds.h - 25 };
+  if (sk === 'oct') {
+    pumpkin(sx, sill, false);
+    if (!L.parts.chair.floor) pumpkin(door.x + door.w - 11, L.floorY + 6, true);
+  } else if (sk === 'spring') {
+    // a bud vase with two blossoms
+    R(sx + 1, sill - 6, 5, 6, INK);
+    R(sx + 2, sill - 5, 3, 4, '#d8f0ff');
+    P(sx + 2, sill - 5, '#ffffff');
+    line(sx + 3, sill - 7, sx + 1, sill - 11, MAT.leaf.lo);
+    line(sx + 3, sill - 7, sx + 5, sill - 12, MAT.leaf.lo);
+    for (const [fx, fy, c] of [[sx + 1, sill - 12, '#ff9ec7'], [sx + 5, sill - 13, '#ffe27a']]) {
+      ell(fx - 2, fy - 1, 5, 4, INK);
+      R(fx - 1, fy, 3, 2, c);
+      P(fx, fy, '#ffffff');
+    }
+    leaf(sx + 6, sill - 9, 4, 2, -0.4, MAT.leaf);
+  } else if (sk === 'dec' && panel.h >= 12) {
+    // a small wreath on the door
+    const cx = panel.x + (panel.w >> 1);
+    const cy = panel.y + Math.min(8, panel.h >> 1);
+    ell(cx - 6, cy - 6, 13, 13, INK);
+    ell(cx - 5, cy - 5, 11, 11, MAT.leaf.f);
+    ell(cx - 3, cy - 3, 7, 7, INK);
+    ell(cx - 2, cy - 2, 5, 5, MAT.sky.f);
+    for (const [dx, dy] of [[-4, -2], [3, -4], [4, 2], [-2, 4], [0, -5]]) P(cx + dx, cy + dy, MAT.leaf.hi);
+    for (const [dx, dy] of [[-4, 1], [2, -4], [3, 4]]) P(cx + dx, cy + dy, '#ff6f8e');
+    R(cx - 2, cy + 4, 5, 2, '#ff6fae');
+    P(cx, cy + 5, INK);
+    P(cx - 2, cy + 6, '#ff6fae');
+    P(cx + 2, cy + 6, '#ff6fae');
+  } else if (sk === 'summer' && panel.h >= 14) {
+    // an ice-lolly poster taped to the door
+    const pw = Math.min(11, panel.w - 2);
+    const px = panel.x + ((panel.w - pw) >> 1);
+    const py = panel.y + 1;
+    R(px, py, pw, 13, INK);
+    R(px + 1, py + 1, pw - 2, 11, '#fff8e6');
+    const lx = px + (pw >> 1) - 2;
+    R(lx, py + 2, 5, 6, INK);
+    R(lx + 1, py + 3, 3, 2, '#ff9ec7');
+    R(lx + 1, py + 5, 3, 2, '#ffe27a');
+    P(lx + 1, py + 3, '#ffd0e4');
+    R(lx + 2, py + 8, 1, 3, MAT.wood.f);
+    R(px - 1, py - 1, 3, 2, 'rgba(255,255,255,0.75)');
+  }
 }
 
 function paintPlants(L) {
@@ -1812,93 +2488,468 @@ function cloud(x, y, c, lo) {
   R(x + 1, y + 5, 13, 1, lo);
 }
 
-function paintSky(L, cache, now, ph) {
-  const { x: ix, y: iy, w: iw, h: ih } = L.parts.window.inner;
-  const S = SKY[ph];
-  const hr = now.getHours() + now.getMinutes() / 60;
-  g.save();
-  g.beginPath();
-  g.rect(ix, iy, iw, ih);
-  g.clip();
-  const n = S.bands.length;
+// ----------------------------------------------------- the view outside
+
+const VIEWS = new Set(['city', 'beach', 'mountains', 'rain', 'stars', 'space', 'garden']);
+const STARRY = ['#14163e', '#191c4c', '#20245a', '#282d68'];
+const SPACE = ['#170f3a', '#1d1348', '#241755', '#2c1b61'];
+const RAIN = {
+  day: ['#9ca8c6', '#aab4ce', '#b8c1d7', '#c6cddf'],
+  dawn: ['#a7a6c6', '#b6b0cb', '#c6bbcf', '#d3c6d4'],
+  golden: ['#a99bbd', '#b8a6c3', '#c7b1c6', '#d3bdca'],
+  dusk: ['#494a78', '#545585', '#5f6192', '#6a6c9d'],
+  night: ['#22254a', '#282c54', '#2f335e', '#373b68'],
+};
+// the scenery takes on the light of the hour
+const PHASE_TINT = { dawn: ['#ffb3c1', 0.16], golden: ['#ff9d7e', 0.22], dusk: ['#3d3a8e', 0.48], night: ['#181a48', 0.64] };
+const toned = new Map();
+function tone(c, ph) {
+  const t = PHASE_TINT[ph];
+  if (!t) return c;
+  const key = c + ph;
+  let v = toned.get(key);
+  if (!v) {
+    const A = rgbaOf(c);
+    const B = rgbaOf(t[0]);
+    const m = (i) => Math.round(A[i] + (B[i] - A[i]) * t[1]).toString(16).padStart(2, '0');
+    v = `#${m(0)}${m(1)}${m(2)}`;
+    toned.set(key, v);
+  }
+  return v;
+}
+
+// scenery shapes per window size, made once
+const geos = new Map();
+function geoFor(iw, ih) {
+  const key = `${iw}x${ih}`;
+  let geo = geos.get(key);
+  if (!geo) {
+    geo = { city: makeCity(iw, ih) };
+    const r = rng(iw * 977 + ih * 31);
+    const pts = (n, y0, y1) => Array.from({ length: n }, () => ({ x: Math.floor(r() * iw), y: Math.floor(y0 + r() * (y1 - y0)), k: r() }));
+    // mountain ridges: a few peaks, each a straight-sided cone
+    const ridge = (n, lo, hi, slope) => {
+      const peaks = Array.from({ length: n }, (_, i) => ({ x: Math.round(((i + 0.2 + r() * 0.6) * iw) / n), h: Math.round(ih * (lo + r() * (hi - lo))) }));
+      return { peaks, hs: Array.from({ length: iw }, (_, x) => Math.max(...peaks.map((p) => p.h - Math.abs(x - p.x) * slope))) };
+    };
+    geo.far = ridge(Math.max(2, Math.round(iw / 26)), 0.46, 0.64, 0.95);
+    geo.mid = ridge(Math.max(3, Math.round(iw / 18)), 0.28, 0.4, 1.15);
+    geo.hillPhase = r() * 6;
+    geo.pines = pts(Math.max(3, Math.round(iw / 14)), 0, 1).map((q) => q.x).sort((a, b) => a - b);
+    geo.glints = pts(Math.round(iw / 5), 0, 1);
+    geo.sea = pts(Math.round(iw / 4), 0, 1);
+    geo.flowers = pts(Math.round(iw / 5), 0, 1);
+    geo.stars = pts(Math.max(14, Math.round((iw * ih) / 32)), 0, ih * 0.85);
+    geo.rain = pts(Math.max(12, Math.round((iw * ih) / 60)), 0, ih);
+    geo.drops = pts(Math.max(4, Math.round(iw / 12)), 2, ih - 3);
+    geo.flakes = pts(Math.max(12, Math.round((iw * ih) / 55)), 0, ih);
+    geo.leaves = pts(Math.max(4, Math.round(iw / 14)), 0, ih);
+    geo.drift = Array.from({ length: iw }, (_, x) => 2 + Math.round(1.2 + Math.sin(x * 0.35 + 1) + Math.sin(x * 0.13)));
+    geos.set(key, geo);
+    if (geos.size > 12) geos.delete(geos.keys().next().value);
+  }
+  return geo;
+}
+
+function skyBands(bands, iw, ih) {
+  const n = bands.length;
   for (let i = 0; i < n; i++) {
-    const y0 = iy + Math.round((i * ih) / n);
-    const y1 = iy + Math.round(((i + 1) * ih) / n);
-    R(ix, y0, iw, y1 - y0, S.bands[i]);
+    const y0 = Math.round((i * ih) / n);
+    const y1 = Math.round(((i + 1) * ih) / n);
+    R(0, y0, iw, y1 - y0, bands[i]);
     if (i) {
-      g.fillStyle = S.bands[i - 1];
-      for (let x = ix + (y0 & 1); x < ix + iw; x += 2) g.fillRect(x, y0, 1, 1);
+      g.fillStyle = bands[i - 1];
+      for (let x = y0 & 1; x < iw; x += 2) g.fillRect(x, y0, 1, 1);
     }
   }
-  const c = cache.city;
+}
+
+function starField(geo, ih, limit, bright) {
+  for (const s of geo.stars) {
+    if (s.y > ih * limit) continue;
+    if (s.k < (bright ? 0.12 : 0.15)) {
+      P(s.x - 1, s.y, '#7f88d6');
+      P(s.x + 1, s.y, '#7f88d6');
+      P(s.x, s.y - 1, '#7f88d6');
+      P(s.x, s.y + 1, '#7f88d6');
+    } else if (!bright && s.k > 0.75) continue;
+    P(s.x, s.y, s.k < 0.5 ? '#fff6d8' : '#d6dcff');
+  }
+}
+
+function moon(x, y, bg) {
+  ell(x - 1, y - 1, 9, 9, '#2f3672');
+  ell(x, y, 7, 7, '#fff3c4');
+  ell(x + 2, y - 1, 7, 7, bg);
+}
+
+// the sun, moon, stars and clouds over an ordinary landscape
+function skyBody(iw, ih, now, ph, geo, season, bands) {
+  const S = SKY[ph];
+  const hr = now.getHours() + now.getMinutes() / 60;
   if (ph === 'night' || ph === 'dusk') {
-    for (const s of c.stars) {
-      if (ph === 'dusk' && s.y > ih * 0.3) continue;
-      const sx = ix + s.x;
-      const sy = iy + s.y;
-      if (s.big) {
-        P(sx - 1, sy, '#7f88d6');
-        P(sx + 1, sy, '#7f88d6');
-        P(sx, sy - 1, '#7f88d6');
-        P(sx, sy + 1, '#7f88d6');
-      }
-      P(sx, sy, s.warm ? '#fff6d8' : '#d6dcff');
-    }
-    if (ph === 'night') {
-      const mx = ix + Math.round(iw * 0.7);
-      const my = iy + 3;
-      ell(mx - 1, my - 1, 9, 9, '#2f3672');
-      ell(mx, my, 7, 7, '#fff3c4');
-      ell(mx + 2, my - 1, 7, 7, S.bands[0]);
-    }
-  } else {
-    if (ph === 'day') {
-      const t = clamp((hr - 7) / 10.5, 0, 1);
-      const sx = ix + 2 + Math.round(t * (iw - 11));
-      const sy = iy + 2 + Math.round(5 * Math.abs(t - 0.5) * 2);
+    starField(geo, ih, ph === 'dusk' ? 0.3 : 0.6, false);
+    if (ph === 'night') moon(Math.round(iw * 0.7), 3, bands[0]);
+    return;
+  }
+  if (ph === 'day') {
+    const t = clamp((hr - 7) / 10.5, 0, 1);
+    const sx = 2 + Math.round(t * (iw - 11));
+    const sy = 2 + Math.round(5 * Math.abs(t - 0.5) * 2);
+    if (season === 'summer') {
+      // a big bright summer sun
+      for (const [dx, dy] of [[3, -3], [3, 10], [-3, 3], [10, 3], [-1, -1], [8, -1], [-1, 8], [8, 8]]) P(sx + dx, sy + dy, '#ffe9a0');
+      ell(sx - 2, sy - 2, 11, 11, '#fff6c8');
+      ell(sx - 1, sy - 1, 9, 9, '#ffe27a');
+      ell(sx + 1, sy + 1, 4, 4, '#fffbe6');
+    } else {
       ell(sx - 1, sy - 1, 9, 9, '#fff6c8');
       ell(sx, sy, 7, 7, '#ffe27a');
       ell(sx + 1, sy + 1, 3, 3, '#fffbe6');
-    } else {
-      const sx = ix + Math.round(iw * (ph === 'dawn' ? 0.2 : 0.3));
-      const sy = iy + Math.round(ih * 0.48);
-      ell(sx - 2, sy - 2, 13, 13, ph === 'dawn' ? '#ffe9c4' : '#ffd0a0');
-      ell(sx, sy, 9, 9, ph === 'dawn' ? '#fff0a8' : '#ffc27a');
     }
-    const mins = now.getHours() * 60 + now.getMinutes();
-    const span = iw + 24;
-    for (const [off, yy] of [[0, 0.1], [0.55, 0.27]]) {
-      const cx0 = ix - 14 + ((Math.floor(mins / 4) + Math.round(off * span)) % span);
-      cloud(cx0, iy + Math.round(ih * yy), S.cloud, S.cloudLo);
-    }
+  } else {
+    const sx = Math.round(iw * (ph === 'dawn' ? 0.2 : 0.3));
+    const sy = Math.round(ih * 0.48);
+    ell(sx - 2, sy - 2, 13, 13, ph === 'dawn' ? '#ffe9c4' : '#ffd0a0');
+    ell(sx, sy, 9, 9, ph === 'dawn' ? '#fff0a8' : '#ffc27a');
   }
-  // the city
-  const bottom = iy + ih;
+  const mins = now.getHours() * 60 + now.getMinutes();
+  const span = iw + 24;
+  for (const [off, yy] of [[0, 0.1], [0.55, 0.27]]) {
+    const cx0 = -14 + ((Math.floor(mins / 4) + Math.round(off * span)) % span);
+    cloud(cx0, Math.round(ih * yy), S.cloud, S.cloudLo);
+  }
+}
+
+function cityScape(iw, ih, now, ph, geo, ax, ay, muted) {
+  const S = SKY[ph];
+  const c = geo.city;
+  const far = muted ? tone('#8f97b8', ph) : S.far;
   for (const b of c.far) {
-    R(ix + b.x, bottom - b.h, b.w, b.h, S.far);
+    R(b.x, ih - b.h, b.w, b.h, far);
     if (S.lit) {
       const r = rng(b.seed + now.getHours() * 7919);
-      for (let wy = bottom - b.h + 3; wy < bottom - 2; wy += 4) {
-        for (let wx = ix + b.x + 1; wx < ix + b.x + b.w - 1; wx += 3) if (r() < S.lit * 0.35) P(wx, wy, '#b9a35a');
+      for (let wy = ih - b.h + 3; wy < ih - 2; wy += 4) {
+        for (let wx = b.x + 1; wx < b.x + b.w - 1; wx += 3) if (r() < S.lit * 0.35) P(wx, wy, muted ? '#a8945e' : '#b9a35a');
       }
     }
   }
+  if (muted) return;
   for (const b of c.near) {
-    const bx = ix + b.x;
-    const by = bottom - b.h;
+    const bx = b.x;
+    const by = ih - b.h;
     R(bx, by, b.w, b.h, S.near);
     if (b.roof < 0.25) R(bx + (b.w >> 1), by - 2, 1, 2, S.near);
     else if (b.roof > 0.8) R(bx + 1, by - 1, b.w - 2, 1, S.near);
     const r = rng(b.seed + now.getHours() * 7919);
-    for (let wy = by + 2; wy < bottom - 1; wy += 3) {
+    for (let wy = by + 2; wy < ih - 1; wy += 3) {
       for (let wx = bx + 1; wx < bx + b.w - 1; wx += 2) {
         if (S.lit) {
           if (r() < S.lit) P(wx, wy, S.win);
-        } else if ((wx + wy) % 4 === 0) P(wx, wy, S.win);
+        } else if ((wx + ax + wy + ay) % 4 === 0) P(wx, wy, S.win);
       }
     }
   }
-  g.restore();
+}
+
+function beachScape(iw, ih, ph, geo) {
+  const dark = ph === 'night' || ph === 'dusk';
+  const hy = Math.round(ih * 0.56);
+  const sandY = Math.round(ih * 0.8);
+  const sea = ['#5db3df', '#74c3e7', '#8fd2ee'];
+  const sh = sandY - hy;
+  for (let i = 0; i < 3; i++) R(0, hy + Math.round((i * sh) / 3), iw, Math.round(((i + 1) * sh) / 3) - Math.round((i * sh) / 3), tone(sea[i], ph));
+  R(0, hy, iw, 1, tone('#c3e8f8', ph));
+  const glint = dark ? '#8f9ad8' : tone('#ffffff', ph);
+  for (const q of geo.sea) {
+    const y = hy + 2 + Math.floor(q.k * (sh - 3));
+    R(q.x, y, 2 + (q.x & 1), 1, glint);
+  }
+  // the sun (or moon) on the water
+  const lx = dark ? Math.round(iw * 0.7) + 3 : ph === 'day' ? -1 : Math.round(iw * (ph === 'dawn' ? 0.2 : 0.3)) + 4;
+  if (lx >= 0 && ph !== 'dusk') {
+    const c = dark ? '#d9d2a6' : '#ffd88f';
+    for (let y = hy + 1, i = 0; y < sandY; y += 2, i++) R(lx - 2 + (i & 1), y, 3 + (i & 1), 1, c);
+  }
+  // a sailboat on the horizon
+  const bx = Math.round(iw * 0.2);
+  R(bx, hy - 1, 6, 1, tone('#ffffff', ph));
+  R(bx + 1, hy, 4, 1, tone('#e48ab0', ph));
+  for (let i = 0; i < 4; i++) R(bx + 3, hy - 5 + i, 1 + (i >> 1), 1, tone('#ffffff', ph));
+  // sand, with the foam line
+  R(0, sandY, iw, ih - sandY, tone('#ffe4ad', ph));
+  for (let x = 0; x < iw; x++) if ((x >> 1) % 3 !== 0) P(x, sandY, tone('#ffffff', ph));
+  R(0, sandY + 1, iw, 1, tone('#f2cf8e', ph));
+  for (const q of geo.flowers) P(q.x, sandY + 3 + Math.floor(q.k * Math.max(1, ih - sandY - 4)), tone('#f0c886', ph));
+  // a striped umbrella
+  const ux = Math.round(iw * 0.74);
+  const top = sandY - 6;
+  R(ux, top + 2, 1, ih - top - 3, tone('#c98a59', ph));
+  const rows = [3, 5, 7];
+  rows.forEach((wd, i) => {
+    for (let k = 0; k < wd * 2 + 1; k++) P(ux - wd + k, top - 2 + i, tone(((k + i) >> 1) & 1 ? '#ffffff' : '#ff8fbf', ph));
+  });
+}
+
+function mountainScape(iw, ih, ph, geo) {
+  const far = tone('#c9c3f0', ph);
+  const snow = tone('#ffffff', ph);
+  for (let x = 0; x < iw; x++) {
+    const h = Math.round(geo.far.hs[x]);
+    if (h > 0) R(x, ih - h, 1, h, far);
+  }
+  for (const pk of geo.far.peaks) {
+    for (let dy = 0; dy < 4; dy++) {
+      const half = Math.floor(dy * 0.95);
+      R(pk.x - half, ih - pk.h + dy, half * 2 + 1, 1, snow);
+    }
+    P(pk.x - 2, ih - pk.h + 4, snow);
+    P(pk.x + 1, ih - pk.h + 4, snow);
+  }
+  const mid = tone('#9eafe6', ph);
+  const midHi = tone('#b3c1ee', ph);
+  for (let x = 0; x < iw; x++) {
+    const h = Math.round(geo.mid.hs[x]);
+    if (h > 0) R(x, ih - h, 1, h, mid);
+  }
+  for (const pk of geo.mid.peaks) for (let dy = 1; dy < 6; dy++) P(pk.x - Math.floor(dy * 1.15), ih - pk.h + dy, midHi);
+  const hill = tone('#a3dcb4', ph);
+  const hillHi = tone('#c2ecc9', ph);
+  const hb = Math.round(ih * 0.14);
+  const hh = (x) => hb + Math.round(2 * Math.sin(x * 0.12 + geo.hillPhase) + Math.sin(x * 0.31));
+  for (let x = 0; x < iw; x++) {
+    const h = hh(x);
+    R(x, ih - h, 1, h, hill);
+    P(x, ih - h, hillHi);
+  }
+  const pine = tone('#6dbf8d', ph);
+  const pineLo = tone('#57a979', ph);
+  for (const px of geo.pines) {
+    const by = ih - hh(px) + 2;
+    for (let i = 0; i < 7; i++) {
+      const half = (i >> 1) + (i > 4 ? 0 : 0);
+      R(px - half, by - 8 + i, half * 2 + 1, 1, i & 1 ? pineLo : pine);
+    }
+    R(px, by - 1, 1, 2, tone('#a5765a', ph));
+  }
+}
+
+function gardenScape(iw, ih, ph, geo) {
+  const gy = Math.round(ih * 0.8);
+  // a round tree on the left
+  const tx = Math.round(iw * 0.2);
+  const cw = clamp(Math.round(iw * 0.36), 14, 30);
+  const ch = clamp(Math.round(ih * 0.4), 12, 26);
+  const ty = gy - 6 - ch;
+  R(tx - 1, ty + ch - 4, 3, gy - (ty + ch - 4), tone('#b98261', ph));
+  ell(tx - (cw >> 1), ty, cw, ch, tone('#8fd4a0', ph));
+  ell(tx - (cw >> 1) + 2, ty + 1, cw - 7, ch - 6, tone('#a9e3b5', ph));
+  ell(tx - (cw >> 1) + 4, ty + 2, Math.max(3, cw >> 2), Math.max(2, ch >> 2), tone('#c9f2d0', ph));
+  for (let i = 0; i < 4; i++) P(tx - 4 + i * 3, ty + ch - 3 - (i & 1), tone('#6fbf8a', ph));
+  // hedge
+  const hedge = tone('#7fcf98', ph);
+  const hedgeHi = tone('#9ddcae', ph);
+  for (let x = 0; x < iw; x++) {
+    const h = 6 + Math.round(1.5 + 1.5 * Math.sin(x * 0.55));
+    R(x, gy - h, 1, h, hedge);
+    if ((x & 3) === 1) P(x, gy - h + 1, hedgeHi);
+  }
+  // a white picket fence
+  const post = tone('#ffffff', ph);
+  const postLo = tone('#d9d4f0', ph);
+  R(0, gy - 6, iw, 1, post);
+  R(0, gy - 3, iw, 1, post);
+  for (let x = 1; x < iw; x += 5) {
+    R(x, gy - 8, 3, 9, post);
+    P(x + 1, gy - 9, post);
+    R(x + 2, gy - 7, 1, 8, postLo);
+  }
+  // grass and flowers
+  R(0, gy, iw, ih - gy, tone('#a9e3a8', ph));
+  R(0, gy, iw, 1, tone('#c7f0c4', ph));
+  const fc = ['#ff9ec7', '#ffe27a', '#c9b6ff', '#ffffff'];
+  for (const q of geo.flowers) {
+    const fy = gy + 2 + Math.floor(q.k * Math.max(1, ih - gy - 3));
+    P(q.x, fy + 1, tone('#6fbf8a', ph));
+    P(q.x, fy, tone(fc[Math.floor(q.k * 40) % 4], ph));
+  }
+}
+
+function rainScape(iw, ih, now, ph, geo, ax, ay) {
+  const dark = ph === 'night' || ph === 'dusk';
+  // a low cloud bank
+  const cb = RAIN[ph][0];
+  for (let i = 0; i < iw; i += 9) ell(i - 4, -4 + ((i / 9) & 1) * 2, 14, 9, cb);
+  cityScape(iw, ih, now, ph, geo, ax, ay, true);
+  const streak = dark ? '#5f679c' : '#dfe5f3';
+  const b = Math.floor((now.getHours() * 60 + now.getMinutes()) / 4);
+  for (const q of geo.rain) {
+    const y = (q.y + b * 5) % ih;
+    P(q.x, y, streak);
+    P(q.x, y + 1, streak);
+    P(q.x - 1, y + 2, streak);
+  }
+  // drops on the glass
+  for (const q of geo.drops) {
+    P(q.x, q.y, dark ? '#9aa3d4' : '#f4f7ff');
+    P(q.x, q.y + 1, dark ? '#5a6296' : '#9ba7c8');
+  }
+}
+
+function starScape(iw, ih, geo) {
+  // a soft band of nebula
+  for (let x = 0; x < iw; x++) {
+    const y = Math.round(ih * 0.62 - x * 0.45);
+    for (let k = -3; k <= 3; k++) if (((x + k) & 1) === 0 && y + k > 0) P(x, y + k, Math.abs(k) < 2 ? '#34307a' : '#2a2a6c');
+  }
+  starField(geo, ih, 0.85, true);
+  moon(Math.round(iw * 0.74), Math.round(ih * 0.1), STARRY[0]);
+  // a shooting star
+  const sx = Math.round(iw * 0.22);
+  const sy = Math.round(ih * 0.14);
+  ['#ffffff', '#ffffff', '#d6d6ff', '#a9a9e6', '#7e80c8', '#5b5ea8'].forEach((c, i) => P(sx - i, sy + (i >> 1), c));
+  // hills with a little lit cabin
+  const hb = Math.round(ih * 0.12);
+  for (let x = 0; x < iw; x++) {
+    const h = hb + Math.round(2 * Math.sin(x * 0.09 + 1) + Math.sin(x * 0.27));
+    R(x, ih - h, 1, h, '#101233');
+  }
+  const cx = Math.round(iw * 0.62);
+  const cy = ih - hb - 3;
+  R(cx, cy, 6, 4, '#101233');
+  for (let i = 0; i < 4; i++) R(cx - 1 + i, cy - 1 - i, 8 - 2 * i, 1, '#101233');
+  P(cx + 2, cy + 1, '#ffe27a');
+  P(cx + 3, cy + 1, '#ffd36b');
+}
+
+function spaceScape(iw, ih, geo) {
+  starField(geo, ih, 1, true);
+  for (const q of geo.sea) P(q.x, Math.floor(q.k * ih), q.k < 0.5 ? '#ff9ec7' : '#8fd0ff');
+  // a ringed planet
+  const r = clamp(Math.round(Math.min(iw, ih) * 0.16), 5, 10);
+  const cx = Math.round(iw * 0.34);
+  const cy = Math.round(ih * 0.5);
+  const ring = (front) => {
+    for (let x = -r * 2; x <= r * 2; x++) {
+      const t = x / (r * 2);
+      const dy = Math.round(Math.sqrt(Math.max(0, 1 - t * t)) * r * 0.42);
+      const y = front ? cy + dy : cy - dy;
+      if (!front && Math.abs(x) < r) continue;
+      P(cx + x, y, '#c9b6ff');
+      P(cx + x, y + 1, '#9a85dc');
+    }
+  };
+  ring(false);
+  ell(cx - r, cy - r, r * 2 + 1, r * 2 + 1, '#ffc6a1');
+  for (let y = -r + 2; y < r; y += 3) R(cx - r + 1 + (y & 1), cy + y, r * 2 - 1, 1, '#f4a985');
+  ell(cx - r + 2, cy - r + 2, Math.max(2, r - 1), Math.max(2, r - 2), '#ffe2cc');
+  ring(true);
+  // a small blue moon and a far pink one
+  const mx = Math.round(iw * 0.78);
+  const my = Math.round(ih * 0.26);
+  ell(mx - 3, my - 3, 7, 7, '#a9dcff');
+  ell(mx - 1, my - 1, 4, 4, '#d8f0ff');
+  P(mx + 2, my + 2, '#78b0e2');
+  ell(Math.round(iw * 0.66), Math.round(ih * 0.76), 3, 3, '#ffb5d2');
+}
+
+// what the season is doing outside
+function seasonOutside(iw, ih, now, ph, geo, season, view) {
+  if (view === 'space') return;
+  const dark = ph === 'night' || ph === 'dusk';
+  const b = Math.floor((now.getHours() * 60 + now.getMinutes()) / 4);
+  if (season === 'winter') {
+    if (view !== 'rain') {
+      for (const q of geo.flakes) {
+        const x = (q.x + (b % 7)) % iw;
+        const y = (q.y + b * 3) % ih;
+        const c = dark ? '#dfe4ff' : '#ffffff';
+        if (q.k < 0.15) {
+          P(x - 1, y, c);
+          P(x + 1, y, c);
+          P(x, y - 1, c);
+          P(x, y + 1, c);
+        } else P(x, y, c);
+      }
+    }
+    const snow = dark ? '#cfd5f2' : '#ffffff';
+    const shade = dark ? '#a9b0d8' : '#dfe9f7';
+    for (let x = 0; x < iw; x++) {
+      const h = geo.drift[x];
+      R(x, ih - h, 1, h, snow);
+      P(x, ih - 1, shade);
+    }
+  } else if (season === 'autumn') {
+    const cols = ['#ff9d5c', '#ffc35c', '#f07f6a', '#e7a04b'];
+    geo.leaves.forEach((q, i) => {
+      const x = (q.x + b * 2) % iw;
+      const y = (q.y + b * 3) % (ih - 3);
+      const c = tone(cols[i % 4], ph);
+      R(x, y, 2, 2, c);
+      P(x + ((b + i) & 1), y + 1, tone('#c76b3f', ph));
+    });
+    for (let i = 0; i < 4; i++) {
+      const x = Math.round(((i + 0.5) * iw) / 4 + (i & 1 ? 3 : -2));
+      R(x, ih - 1, 3, 1, tone(cols[i], ph));
+      P(x + 1, ih - 2, tone(cols[(i + 1) % 4], ph));
+    }
+  } else if (season === 'spring') {
+    // a blossom branch reaching in from the corner, petals on the air
+    const twig = tone('#a8735a', ph);
+    const ex = Math.round(iw * 0.32);
+    const ey = Math.round(ih * 0.16);
+    line(0, 1, ex, ey, twig);
+    line(Math.round(ex * 0.5), Math.round(ey * 0.5) + 1, Math.round(ex * 0.62), ey + 4, twig);
+    const pk = tone('#ffc1dc', ph);
+    const pkLo = tone('#f59bc2', ph);
+    for (const [fx, fy] of [[ex, ey], [Math.round(ex * 0.62), ey + 5], [Math.round(ex * 0.35), Math.round(ey * 0.35) + 1], [Math.round(ex * 0.8), Math.round(ey * 0.8) - 2]]) {
+      R(fx - 1, fy, 3, 1, pk);
+      R(fx, fy - 1, 1, 3, pk);
+      P(fx + 1, fy + 1, pkLo);
+      P(fx, fy, tone('#ffffff', ph));
+    }
+    geo.leaves.forEach((q, i) => {
+      if (i & 1) return;
+      P((q.x + b * 2) % iw, (q.y + b * 2) % ih, pk);
+    });
+  }
+}
+
+// paint the whole view into its own little canvas (cached per 4 minutes)
+const skies = new Map();
+function viewCanvas(L, now, ph, view, season) {
+  const inner = L.parts.window.inner;
+  const bucket = Math.floor((now.getHours() * 60 + now.getMinutes()) / 4);
+  const key = `${L.W}x${L.H}|${view}|${ph}|${season}|${bucket}`;
+  let c = skies.get(key);
+  if (c) return c;
+  const { w: iw, h: ih } = inner;
+  c = canvas(iw, ih);
+  const prev = g;
+  g = c.getContext('2d');
+  const geo = geoFor(iw, ih);
+  const bands = view === 'stars' ? STARRY : view === 'space' ? SPACE : view === 'rain' ? RAIN[ph] : SKY[ph].bands;
+  skyBands(bands, iw, ih);
+  if (view === 'stars') starScape(iw, ih, geo);
+  else if (view === 'space') spaceScape(iw, ih, geo);
+  else if (view === 'rain') rainScape(iw, ih, now, ph, geo, inner.x, inner.y);
+  else {
+    skyBody(iw, ih, now, ph, geo, season, bands);
+    if (view === 'beach') beachScape(iw, ih, ph, geo);
+    else if (view === 'mountains') mountainScape(iw, ih, ph, geo);
+    else if (view === 'garden') gardenScape(iw, ih, ph, geo);
+    else cityScape(iw, ih, now, ph, geo, inner.x, inner.y, false);
+  }
+  seasonOutside(iw, ih, now, ph, geo, season, view);
+  g = prev;
+  skies.set(key, c);
+  if (skies.size > 16) skies.delete(skies.keys().next().value);
+  return c;
+}
+
+function paintSky(L, now, ph, view, season) {
+  const { x, y } = L.parts.window.inner;
+  g.drawImage(viewCanvas(L, now, ph, view, season), x, y);
 }
 
 function paintClockHands(L, now) {
@@ -1924,15 +2975,11 @@ function paintCalendarDate(L, now, dayOffset) {
 }
 
 function paintBoardBars(L, bars) {
-  const { x, y, w, h } = L.parts.board;
-  const ix = x + 4;
-  const iy = y + 4;
-  const iw = w - 8;
-  const ih = h - 8;
-  const cw = Math.round(iw * 0.6);
-  const ox = ix + 3;
-  const oy = iy + ih - 3; // baseline
-  const top = iy + 10;
+  const c = L.parts.board.chart;
+  const cw = c.w + 3;
+  const ox = c.x;
+  const oy = c.base; // baseline
+  const top = c.top;
   const ch = oy - top;
   R(ox, top, 1, ch + 1, SOFT);
   R(ox, oy, cw - 3, 1, SOFT);
@@ -2062,7 +3109,7 @@ function paintLighting(ctx, L, ph, st, isFront) {
   const warm = (a) => `rgba(255, 196, 130, ${(a * k).toFixed(3)})`;
   const cool = (a) => `rgba(150, 200, 255, ${(a * k).toFixed(3)})`;
   const dark = ph === 'night' || ph === 'dusk';
-  if (!dark && !isFront) sunPatch(L, st.now, ph);
+  if (!dark && !isFront) sunPatch(L, st.skyNow, ph);
   const y0 = parts.sy - 17;
   if (dark) {
     if (!isFront) for (const b of parts.lights.bulbs) glow(b.x + 1, b.y + 2, 5, warm(0.045));
@@ -2071,6 +3118,10 @@ function paintLighting(ctx, L, ph, st, isFront) {
       glow(l.x + 5, l.top + 4, 14, warm(0.05));
       cone(l.x + 5, l.top + 9, parts.base + 1, 4, 0.36, warm(0.035));
       cone(l.x + 5, l.top + 9, parts.base + 1, 2, 0.2, warm(0.03));
+    }
+    if (st.music && !isFront) {
+      const p = parts.earned.rec;
+      glow(p.x + 6, p.y + 2, 6, warm(0.05));
     }
     parts.desks.forEach((d, i) => {
       if (!st.deskBusy[i]) return;
@@ -2102,7 +3153,6 @@ function canvas(W, H) {
   return c;
 }
 
-// paint into a pixel buffer, then hand it to a canvas in one go
 // paint rows [oy, oy + H) into a pixel buffer, then hand it to a canvas in
 // one go (the scratch buffer is reused between bakes)
 let scratch = null;
@@ -2122,37 +3172,49 @@ function bake(W, H, oy, fn) {
   return c;
 }
 
-function buildStatic(L) {
+function buildStatic(L, opts) {
   const { W, H, parts } = L;
-  const back = bake(W, H, 0, () => paintStaticBack(L));
-  // the front layer only lives in a thin band around the seats
-  const frontY = parts.sy - 30;
-  const front = bake(W, parts.base + 2 - frontY, frontY, () => {
-    paintSofa(L, true);
-    for (const d of parts.desks) paintDesk(L, d, true);
-  });
-  const { w: iw, h: ih } = parts.window.inner;
-  return { back, front, frontY, city: makeCity(iw, ih) };
+  WP = WALLS[opts.wall];
+  FP = FLOORS[opts.floor];
+  try {
+    const back = bake(W, H, 0, () => paintStaticBack(L, opts));
+    // the front layer only lives in a thin band around the seats
+    const frontY = parts.sy - 30;
+    const frontB = Math.max(parts.base + 2, parts.chair.y + 4);
+    const front = bake(W, frontB - frontY, frontY, () => {
+      paintSofa(L, true);
+      paintChair(L, true);
+      for (const d of parts.desks) paintDesk(L, d, true);
+    });
+    return { back, front, frontY };
+  } finally {
+    WP = WALLS.lilac;
+    FP = FLOORS.wood;
+  }
 }
 
-function paintStaticBack(L) {
+function paintStaticBack(L, opts) {
   const { parts } = L;
   paintWall(L);
-  paintWindow(L);
+  paintWindow(L, opts);
   paintBoard(L);
   paintCalendarPaper(L);
   paintClockFace(L);
+  paintSign(L);
   paintShelfWall(L);
   paintPosters(L);
+  paintEarned(L, opts.earned);
   paintDoor(L);
   paintFloor(L);
   paintDoorMatOnly(L);
+  paintSeasonStatic(L, opts.season);
   paintRug(L);
   paintLights(L);
   paintCoat(L);
   paintPlants(L);
   paintFridge(L);
   paintBin(L);
+  paintChair(L, false);
   paintCabinet(L);
   paintBookshelf(L);
   paintAquarium(L);
@@ -2171,19 +3233,37 @@ function paintDoorMatOnly(L) {
   for (let i = x + 4; i < x + w - 4; i += 3) P(i, fy + 2, MAT.lilac.hi);
 }
 
-function staticFor(L) {
-  const key = `${L.W}x${L.H}`;
+function staticFor(L, opts) {
+  const e = opts.earned;
+  const key = `${L.W}x${L.H}|${opts.wall}|${opts.floor}|${opts.season}|${e ? `${e.trophies},${e.plant},${e.books}` : '-'}`;
   let s = cache.get(key);
   if (!s) {
-    s = buildStatic(L);
+    s = buildStatic(L, opts);
     cache.set(key, s);
-    if (cache.size > 8) cache.delete(cache.keys().next().value);
+    if (cache.size > 10) cache.delete(cache.keys().next().value);
   }
   return s;
 }
 
+const LIGHTS = { day: 'day', golden: 'golden', night: 'night' };
+const LIGHT_HOUR = { day: 12, golden: 18, night: 23 };
+
+// the phase the room is lit for: the real time of day, or the one the user
+// picked (state.style.light)
+export function roomPhase(state = {}) {
+  const now = state.now instanceof Date ? state.now : new Date();
+  return LIGHTS[state.style && state.style.light] || phaseOf(now);
+}
+
+// 'spring' | 'summer' | 'autumn' | 'winter' for the room's date
+export function roomSeason(state = {}) {
+  const now = state.now instanceof Date ? state.now : new Date();
+  return seasonOf(now, Number(state.dayOffset) || 0).season;
+}
+
 export function paintRoom(back, front, layout, state = {}) {
   const L = layout;
+  const style = state.style || {};
   const st = {
     now: state.now instanceof Date ? state.now : new Date(),
     dayOffset: Number(state.dayOffset) || 0,
@@ -2192,16 +3272,33 @@ export function paintRoom(back, front, layout, state = {}) {
     fridgeCount: Number(state.fridgeCount) || 0,
     eggCount: Number(state.eggCount) || 0,
     boardBars: Array.isArray(state.boardBars) ? state.boardBars : [],
+    music: !!state.music,
   };
-  const S = staticFor(L);
-  const ph = phaseOf(st.now);
+  const forced = LIGHTS[style.light];
+  const ph = forced || phaseOf(st.now);
+  // a forced light keeps the real minutes (so clouds still drift) at an hour
+  // that suits it
+  st.skyNow = forced && phaseOf(st.now) !== forced ? new Date(st.now.getFullYear(), st.now.getMonth(), st.now.getDate(), LIGHT_HOUR[forced], st.now.getMinutes()) : st.now;
+  const sea = seasonOf(st.now, st.dayOffset);
+  const e = state.earned && typeof state.earned === 'object' ? state.earned : null;
+  const S = staticFor(L, {
+    wall: WALLS[style.wall] ? style.wall : 'lilac',
+    floor: FLOORS[style.floor] ? style.floor : 'wood',
+    season: sea.key,
+    earned: e && {
+      trophies: clamp(Math.floor(Number(e.trophies) || 0), 0, 6),
+      plant: clamp(Math.floor(Number(e.plant) || 0), 0, 5),
+      books: clamp(Math.floor(Number(e.books) || 0), 0, 8),
+    },
+  });
+  const view = VIEWS.has(style.view) ? style.view : 'city';
   const { parts } = L;
 
   // ---- back
   g = back;
   back.imageSmoothingEnabled = false;
   back.clearRect(0, 0, L.W, L.H);
-  paintSky(L, S, st.now, ph);
+  paintSky(L, st.skyNow, ph, view, sea.season);
   back.drawImage(S.back, 0, 0);
   paintClockHands(L, st.now);
   paintCalendarDate(L, st.now, st.dayOffset);
@@ -2214,6 +3311,7 @@ export function paintRoom(back, front, layout, state = {}) {
   paintBinPaper(L, st.binCount);
   paintFrost(L, st.fridgeCount);
   paintNestLamp(L, st.eggCount > 0);
+  paintRecordLive(L, st.music);
   if (ph === 'night' || ph === 'dusk') {
     for (const b of parts.lights.bulbs) paintBulb(b, true);
     paintFloorLampLit(L);
@@ -2228,4 +3326,17 @@ export function paintRoom(back, front, layout, state = {}) {
   for (const d of parts.desks) if (!st.deskBusy[d.i]) paintChairOut(L, d);
   paintLighting(front, L, ph, st, true);
   g = null;
+}
+
+// for the preview page's self-checks: the bare wallpaper, nothing on it
+export function paintWallOnly(ctx, layout, wall = 'lilac') {
+  const L = layout;
+  WP = WALLS[wall] || WALLS.lilac;
+  try {
+    const c = bake(L.W, L.H, 0, () => paintWall(L));
+    ctx.clearRect(0, 0, L.W, L.H);
+    ctx.drawImage(c, 0, 0);
+  } finally {
+    WP = WALLS.lilac;
+  }
 }
